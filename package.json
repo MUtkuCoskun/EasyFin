@@ -1,0 +1,52 @@
+{
+  "name": "fin-ai",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "crawl": "tsx scripts/kap-crawl.ts",
+    "crawl2": "tsx scripts/kap-crawl-lite.ts",
+    "isy": "tsx scripts/isyatirim-all.ts",
+    "isy:batch": "npx tsx scripts/isyatirim-batch.ts",
+    "isy:upload": "gcloud storage rsync --recursive public/isyatirim gs://finai-a381b.firebasestorage.app/isyatirim",
+    "isy:all": "npm run isy:batch && npm run isy:upload",
+    "tickers+logos:pull": "tsx scripts/fetch-bist-logos.ts",
+    "logos:download": "tsx scripts/download-logos.ts",
+    "logos:upload": "gcloud storage rsync --recursive public/logos gs://finai-a381b.firebasestorage.app/logos",
+    "isy:inc": "tsx scripts/isyatirim-incremental.ts",
+    "isy:inc:all": "tsx scripts/isyatirim-incremental.ts --all",
+    "isy:update": "npm run isy:inc:all && npm run isy:upload",
+    "tickers:reconcile": "tsx scripts/reconcile-tickers.ts --new data/new-tickers.txt",
+    "tickers:reconcile:clean-upload": "tsx scripts/reconcile-tickers.ts --new data/new-tickers.txt --delete-remote --upload"
+  },
+  "dependencies": {
+    "cheerio": "^1.1.2",
+    "exceljs": "^4.4.0",
+    "firebase-admin": "^13.4.0",
+    "next": "15.4.6",
+    "react": "19.1.0",
+    "react-dom": "19.1.0"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3",
+    "@tailwindcss/postcss": "^4.1.11",
+    "@types/node": "^20.19.10",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "autoprefixer": "^10.4.21",
+    "axios": "^1.11.0",
+    "eslint": "^9",
+    "eslint-config-next": "15.4.6",
+    "firebase-tools": "^14.12.0",
+    "p-limit": "^6.2.0",
+    "playwright": "^1.54.2",
+    "postcss": "^8.5.6",
+    "sharp": "^0.34.3",
+    "tailwindcss": "^3.4.14",
+    "tsx": "^4.20.4",
+    "typescript": "^5"
+  }
+}

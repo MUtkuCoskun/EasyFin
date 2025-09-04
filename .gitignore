@@ -1,0 +1,16 @@
+node_modules/
+.next/
+.env*
+.DS_Store
+dist/
+coverage/
+serviceAccountKey.json
+node_modules/
+.next/
+.env*
+.DS_Store
+dist/
+coverage/
+.vscode/
+data/
+serviceAccountKey.json
