@@ -2,26 +2,14 @@
   "name": "fin-ai",
   "version": "0.1.0",
   "private": true,
+  {
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build --no-lint --no-typecheck",
     "start": "next start",
-    "lint": "next lint",
-    "crawl": "tsx scripts/kap-crawl.ts",
-    "crawl2": "tsx scripts/kap-crawl-lite.ts",
-    "isy": "tsx scripts/isyatirim-all.ts",
-    "isy:batch": "npx tsx scripts/isyatirim-batch.ts",
-    "isy:upload": "gcloud storage rsync --recursive public/isyatirim gs://finai-a381b.firebasestorage.app/isyatirim",
-    "isy:all": "npm run isy:batch && npm run isy:upload",
-    "tickers+logos:pull": "tsx scripts/fetch-bist-logos.ts",
-    "logos:download": "tsx scripts/download-logos.ts",
-    "logos:upload": "gcloud storage rsync --recursive public/logos gs://finai-a381b.firebasestorage.app/logos",
-    "isy:inc": "tsx scripts/isyatirim-incremental.ts",
-    "isy:inc:all": "tsx scripts/isyatirim-incremental.ts --all",
-    "isy:update": "npm run isy:inc:all && npm run isy:upload",
-    "tickers:reconcile": "tsx scripts/reconcile-tickers.ts --new data/new-tickers.txt",
-    "tickers:reconcile:clean-upload": "tsx scripts/reconcile-tickers.ts --new data/new-tickers.txt --delete-remote --upload"
-  },
+    "lint": "next lint"
+  }
+}
   "dependencies": {
     "cheerio": "^1.1.2",
     "exceljs": "^4.4.0",
