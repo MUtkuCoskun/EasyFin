@@ -107,6 +107,18 @@ function MiniLineChart({
   )
 }
 
+
+function MiniPriceChart({ data, w = 800, h = 220 }: { data: PriceRow[]; w?: number; h?: number }) {
+  if (!data?.length) return <div className="text-slate-400">Veri yok</div>
+  const pad = 12
+  const ys = data.map(d => Number(d.close))
+  const min = Math.min(...ys), max = Math.max(...ys)
+  const sx = (i: number) => pad + (i / Math.max(1, data.length - 1)) * (w - pad * 2)
+  const sy = (v: number) => pad + (1 - ((v - min) / ((max - min) || 1))) * (h - pad * 2)
+  const d = data.map((r, i) => `${i ? 'L' : 'M'} ${sx(i)} ${sy(ys[i])}`).join(' ')
+  return <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`}><path d={d} fill="none" stroke="currentColor" strokeWidth="2" /></svg>
+}
+
 function MiniBarChart({
   data, yKey, w = 800, h = 220
 }: { data: any[]; yKey: string; w?: number; h?: number }) {
