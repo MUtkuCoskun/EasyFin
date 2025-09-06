@@ -54,10 +54,32 @@ type VoteRow = { field: string; value: string | null }
 type K47Row = { m1?: string | null; m2?: string | null; m3?: string | null; m4?: string | null; m5?: number | null; m6?: number | null; m7?: number | null }
 type RawKapPayload = { kap?: any; bilanco?: any }
 
-async function loadCompany(ticker: string) {
+type CompanyInfo = {
+  ticker: string
+  name?: string
+  sector?: string
+  sektor_ana?: string
+  sektor_alt?: string
+  internet_adresi?: string
+  islem_gordugu_pazar?: string
+  dahil_oldugu_endeksler?: string[] | null
+  merkez_adresi?: string
+  fiili_dolasim_oran?: number | null
+  fiili_dolasim_tutar_tl?: number | null
+  last: number | null
+  mcap: number | null
+}
+
+async function loadCompany(ticker: string): Promise<CompanyInfo> {
   const { data: c } = await supabase
     .from('companies')
-    .select('ticker,name,sector,sector_main,sector_sub,website,shares_outstanding')
+    .select(`
+      ticker,name,sector,
+      sector_main, sector_sub,
+      website, market, indices, address,
+      free_float_ratio, free_float_mcap,
+      shares_outstanding
+    `)
     .eq('ticker', ticker).maybeSingle()
 
   const { data: p } = await supabase
@@ -72,8 +94,15 @@ async function loadCompany(ticker: string) {
   return {
     ticker,
     name: c?.name ?? ticker,
-    sector: c?.sector ?? c?.sector_main ?? c?.sector_sub ?? undefined,
-    website: c?.website ?? undefined,
+    sector: c?.sector ?? undefined,
+    sektor_ana: c?.sector_main ?? undefined,
+    sektor_alt: c?.sector_sub ?? undefined,
+    internet_adresi: c?.website ?? undefined,
+    islem_gordugu_pazar: c?.market ?? undefined,
+    dahil_oldugu_endeksler: (c?.indices as string[] | null) ?? null,
+    merkez_adresi: c?.address ?? undefined,
+    fiili_dolasim_oran: (c?.free_float_ratio as number | null) ?? null,
+    fiili_dolasim_tutar_tl: (c?.free_float_mcap as number | null) ?? null,
     last, mcap
   }
 }
@@ -103,6 +132,32 @@ async function loadSeriesLast12(ticker: string): Promise<SeriesRow[]> {
   return (data ?? []).sort((a: any, b: any) => +new Date(a.period) - +new Date(b.period)) as SeriesRow[]
 }
 
+function findFirstByKeyRegex(obj: any, re: RegExp): string | null {
+  const seen = new Set<any>()
+  const stack = [obj]
+  while (stack.length) {
+    const cur = stack.pop()
+    if (!cur || typeof cur !== 'object' || seen.has(cur)) continue
+    seen.add(cur)
+    for (const k of Object.keys(cur)) {
+      try {
+        const v = cur[k]
+        if (re.test(k)) {
+          if (typeof v === 'string' && v.trim()) return v.trim()
+          if (typeof v === 'object') {
+            // isim alanı gibi alt objelerde aramaya devam
+            const inner = findFirstByKeyRegex(v, /ad|firma|name|kuruluş|kurulus/i)
+            if (inner) return inner
+          }
+        }
+        if (typeof v === 'string' && re.test(v) && v.trim()) return v.trim()
+        if (v && typeof v === 'object') stack.push(v)
+      } catch { /* yut */ }
+    }
+  }
+  return null
+}
+
 async function loadKAP(ticker: string) {
   const [{ data: board }, { data: own }, { data: subs }, { data: votes }, { data: k47 }, { data: raw }] = await Promise.all([
     supabase.from('kap_board_members').select('name,role,is_executive,gender,profession,first_elected,equity_pct,represented_share_group').eq('ticker', ticker).order('name'),
@@ -113,13 +168,19 @@ async function loadKAP(ticker: string) {
     supabase.from('raw_company_json').select('payload').eq('ticker', ticker).maybeSingle(),
   ])
 
+  // denetim_kurulusu: ham JSON içinden otomatik bul
+  const payload = (raw?.payload ?? null) as RawKapPayload | null
+  const auditFirm =
+    findFirstByKeyRegex(payload, /denetim|audit|bağımsız.?denetim|bagimsiz.?denetim/i) || null
+
   return {
     board: (board ?? []) as BoardRow[],
     own: (own ?? []) as OwnRow[],
     subs: (subs ?? []) as SubRow[],
     votes: (votes ?? []) as VoteRow[],
     k47: (k47 ?? {}) as K47Row,
-    raw: (raw?.payload ?? null) as RawKapPayload | null,
+    raw: payload,
+    denetim_kurulusu: auditFirm,
   }
 }
 
@@ -180,6 +241,10 @@ function Card({ title, children }: React.PropsWithChildren<{ title: string }>) {
     <h3 className="font-semibold">{title}</h3>
     <div className="mt-3 text-slate-300/90">{children}</div>
   </div>
+}
+
+function Tag({ children }: React.PropsWithChildren<{}>) {
+  return <span className="inline-block text-xs px-2 py-1 rounded-full bg-white/10 border border-white/10 mr-2 mb-2">{children}</span>
 }
 
 function fmtNum(n?: number | null, d = 0) {
@@ -249,6 +314,8 @@ export default async function Page({ params }: { params: PageParams }) {
     { id: 'other', title: 'Diğer Bilgiler' },
   ]
 
+  const sermaye5ustu = (kap.own || []).filter(o => (o.pct ?? 0) >= 5)
+
   return (
     <main className="min-h-screen relative">
       <div className="absolute inset-0 bg-gradient-to-b from-[#0B0D16] to-[#131B35]" />
@@ -269,8 +336,8 @@ export default async function Page({ params }: { params: PageParams }) {
               <CompanyHeader company={{
                 ticker: t,
                 name: company.name,
-                sector: company.sector,
-                website: company.website,
+                sector: company.sector ?? company.sektor_ana ?? company.sektor_alt,
+                website: company.internet_adresi,
                 quote: { last: company.last ?? undefined, currency: 'TRY', mcap: company.mcap ?? null }
               }} />
             </div>
@@ -284,11 +351,21 @@ export default async function Page({ params }: { params: PageParams }) {
                   </Card>
                   <Card title="Kısa Bilgiler">
                     <ul className="space-y-2 text-sm">
-                      <li><span className="opacity-70">Sektör:</span> {company.sector ?? '-'}</li>
-                      <li><span className="opacity-70">Web:</span> {company.website ? <a className="underline" href={company.website} target="_blank" rel="noreferrer">{company.website}</a> : '-'}</li>
-                      <li><span className="opacity-70">Fiyat:</span> {company.last ? `${company.last.toFixed(2)} ₺` : '—'}</li>
+                      <li><span className="opacity-70">İnternet Adresi:</span> {company.internet_adresi ? <a className="underline" href={company.internet_adresi} target="_blank" rel="noreferrer">{company.internet_adresi}</a> : '—'}</li>
+                      <li><span className="opacity-70">İşlem Gördüğü Pazar:</span> {company.islem_gordugu_pazar ?? '—'}</li>
+                      <li><span className="opacity-70">Sektör (Ana/Alt):</span> {company.sektor_ana ?? '—'} {company.sektor_alt ? ` / ${company.sektor_alt}` : ''}</li>
+                      <li><span className="opacity-70">Merkez Adresi:</span> {company.merkez_adresi ?? '—'}</li>
+                      <li><span className="opacity-70">Fiili Dolaşım Oranı:</span> {fmtPct(company.fiili_dolasim_oran ?? null, 1)}</li>
+                      <li><span className="opacity-70">Fiili Dolaşım Tutarı (TL):</span> {fmtNum(company.fiili_dolasim_tutar_tl ?? null, 0)}</li>
                       <li><span className="opacity-70">Piyasa Değeri:</span> {company.mcap ? new Intl.NumberFormat('tr-TR').format(Math.round(company.mcap)) + ' ₺' : '—'}</li>
+                      <li><span className="opacity-70">Fiyat:</span> {company.last ? `${company.last.toFixed(2)} ₺` : '—'}</li>
                     </ul>
+                    {company.dahil_oldugu_endeksler?.length ? (
+                      <div className="mt-3">
+                        <div className="text-xs opacity-70 mb-1">Dahil Olduğu Endeksler:</div>
+                        <div>{company.dahil_oldugu_endeksler.map((e, i) => <Tag key={i}>{e}</Tag>)}</div>
+                      </div>
+                    ) : null}
                   </Card>
                 </div>
               </Section>
@@ -344,7 +421,24 @@ export default async function Page({ params }: { params: PageParams }) {
               {/* KAP VERİLERİ — TAMAMINI YANSIT */}
               <Section id="kap" title="KAP Verileri">
                 <div className="grid gap-4">
-                  <Card title="Yönetim Kurulu">
+                  <Card title="Denetim Kuruluşu">
+                    {kap.denetim_kurulusu ?? '—'}
+                  </Card>
+
+                  <Card title="≥ %5 Sermaye Payı (Özet)">
+                    {sermaye5ustu.length ? (
+                      <ul className="text-sm space-y-2">
+                        {sermaye5ustu.map((o, i) => (
+                          <li key={i} className="flex items-center justify-between">
+                            <span>{o.holder}</span>
+                            <span className="opacity-80">{fmtNum(o.pct ?? null, 2)}%</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : '—'}
+                  </Card>
+
+                  <Card title="Yönetim Kurulu (board_members)">
                     <SimpleTable
                       cols={[
                         { key: 'name', title: 'Ad Soyad' },
@@ -363,7 +457,7 @@ export default async function Page({ params }: { params: PageParams }) {
                     />
                   </Card>
 
-                  <Card title="Ortaklık Yapısı (≥ %5)">
+                  <Card title="Ortaklık Yapısı (sermaye_5ustu)">
                     <SimpleTable
                       cols={[
                         { key: 'holder', title: 'Ortak' },
@@ -380,7 +474,7 @@ export default async function Page({ params }: { params: PageParams }) {
                     />
                   </Card>
 
-                  <Card title="Bağlı Ortaklıklar">
+                  <Card title="Bağlı Ortaklıklar (bagli_ortakliklar)">
                     <SimpleTable
                       cols={[
                         { key: 'company', title: 'Şirket' },
@@ -403,7 +497,7 @@ export default async function Page({ params }: { params: PageParams }) {
                     />
                   </Card>
 
-                  <Card title="Oy Hakları">
+                  <Card title="Oy Hakları (oy_haklari)">
                     <SimpleTable
                       cols={[
                         { key: 'field', title: 'Alan' },
@@ -413,7 +507,7 @@ export default async function Page({ params }: { params: PageParams }) {
                     />
                   </Card>
 
-                  <Card title="SPK Kurumsal Yönetim (4.7 Özet)">
+                  <Card title="SPK Kurumsal Yönetim (4.7)">
                     <SimpleTable
                       cols={[
                         { key: 'm1', title: 'M1' },
