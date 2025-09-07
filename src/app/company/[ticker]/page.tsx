@@ -70,6 +70,30 @@ type CompanyInfo = {
   mcap: number | null
 }
 
+/* ---------- META: tip + loader ---------- */
+type MetaRow = {
+  full_name: string | null
+  description: string | null
+  free_float: number | null
+  market_cap: number | null
+}
+
+async function loadMeta(ticker: string): Promise<MetaRow> {
+  const { data } = await supabase
+    .from('company_meta')
+    .select('full_name,description,free_float,market_cap')
+    .eq('ticker', ticker)
+    .maybeSingle()
+
+  return {
+    full_name: data?.full_name ?? null,
+    description: data?.description ?? null,
+    // Supabase numeric alanlar string dönebilir; Number(...) ile dönüştür.
+    free_float: data?.free_float != null ? Number(data.free_float) : null,
+    market_cap: data?.market_cap != null ? Number(data.market_cap) : null,
+  }
+}
+
 async function loadCompany(ticker: string): Promise<CompanyInfo> {
   const { data: c } = await supabase
     .from('companies')
@@ -145,7 +169,6 @@ function findFirstByKeyRegex(obj: any, re: RegExp): string | null {
         if (re.test(k)) {
           if (typeof v === 'string' && v.trim()) return v.trim()
           if (typeof v === 'object') {
-            // isim alanı gibi alt objelerde aramaya devam
             const inner = findFirstByKeyRegex(v, /ad|firma|name|kuruluş|kurulus/i)
             if (inner) return inner
           }
@@ -168,7 +191,6 @@ async function loadKAP(ticker: string) {
     supabase.from('raw_company_json').select('payload').eq('ticker', ticker).maybeSingle(),
   ])
 
-  // denetim_kurulusu: ham JSON içinden otomatik bul
   const payload = (raw?.payload ?? null) as RawKapPayload | null
   const auditFirm =
     findFirstByKeyRegex(payload, /denetim|audit|bağımsız.?denetim|bagimsiz.?denetim/i) || null
@@ -298,12 +320,13 @@ function Details({ summary, children }: React.PropsWithChildren<{ summary: strin
 export default async function Page({ params }: { params: PageParams }) {
   const t = (params.ticker || '').toUpperCase()
 
-  const [company, prices, ratios, series, kap] = await Promise.all([
+  const [company, prices, ratios, series, kap, meta] = await Promise.all([
     loadCompany(t),
     loadPrices(t, 240),
     loadRatios(t),
     loadSeriesLast12(t),
     loadKAP(t),
+    loadMeta(t), // ← eklendi
   ])
 
   const sections = [
@@ -315,6 +338,11 @@ export default async function Page({ params }: { params: PageParams }) {
   ]
 
   const sermaye5ustu = (kap.own || []).filter(o => (o.pct ?? 0) >= 5)
+
+  // Halka açıklık META kolonun % (ör. 35) gelme ihtimaline karşı oranlaştır.
+  const ffMetaRatio = meta.free_float != null
+    ? (meta.free_float > 1 ? meta.free_float / 100 : meta.free_float)
+    : null
 
   return (
     <main className="min-h-screen relative">
@@ -347,7 +375,14 @@ export default async function Page({ params }: { params: PageParams }) {
               <Section id="overview" title="Genel Bakış">
                 <div className="grid gap-4 md:grid-cols-2">
                   <Card title="Şirket Hakkında">
-                    {company.name || '—'}
+                    <div className="space-y-2">
+                      <div className="text-base font-semibold">
+                        {meta.full_name || company.name || '—'}
+                      </div>
+                      <div className="text-sm whitespace-pre-wrap">
+                        {meta.description || '—'}
+                      </div>
+                    </div>
                   </Card>
                   <Card title="Kısa Bilgiler">
                     <ul className="space-y-2 text-sm">
@@ -359,6 +394,9 @@ export default async function Page({ params }: { params: PageParams }) {
                       <li><span className="opacity-70">Fiili Dolaşım Tutarı (TL):</span> {fmtNum(company.fiili_dolasim_tutar_tl ?? null, 0)}</li>
                       <li><span className="opacity-70">Piyasa Değeri:</span> {company.mcap ? new Intl.NumberFormat('tr-TR').format(Math.round(company.mcap)) + ' ₺' : '—'}</li>
                       <li><span className="opacity-70">Fiyat:</span> {company.last ? `${company.last.toFixed(2)} ₺` : '—'}</li>
+                      {/* --- META ekleri --- */}
+                      <li><span className="opacity-70">Halka Açıklık (META):</span> {fmtPct(ffMetaRatio, 1)}</li>
+                      <li><span className="opacity-70">Piyasa Değeri (META):</span> {fmtNum(meta.market_cap ?? null, 0)} ₺</li>
                     </ul>
                     {company.dahil_oldugu_endeksler?.length ? (
                       <div className="mt-3">
