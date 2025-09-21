@@ -1,0 +1,45 @@
+name: Deploy Firebase (functions + rules)
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+
+      - name: Auth to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+      - name: Install Firebase CLI
+        run: npm i -g firebase-tools
+
+      - name: Set envs
+        run: |
+          echo "EASYFIN_FOLDER_ID=${{ secrets.EASYFIN_FOLDER_ID }}" >> $GITHUB_ENV
+          echo "GCP_PROJECT_ID=${{ secrets.GCP_PROJECT_ID }}" >> $GITHUB_ENV
+
+      - name: Build functions
+        run: |
+          cd functions
+          npm ci
+          npm run build
+
+      - name: Deploy rules
+        run: firebase deploy --project $GCP_PROJECT_ID --only firestore:rules
+
+      - name: Deploy functions
+        env:
+          GOOGLE_CLOUD_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+          EASYFIN_FOLDER_ID: ${{ secrets.EASYFIN_FOLDER_ID }}
+        run: firebase deploy --project $GCP_PROJECT_ID --only functions
