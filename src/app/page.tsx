@@ -17,7 +17,7 @@ export default async function HomePage() {
       <ul className="grid gap-2">
         {items.map((t) => (
           <li key={t.id} className="border rounded p-3 hover:bg-black/5">
-            <Link href={`/${t.id}`}>
+            <Link href={`/company/${t.id}`}>
               <span className="font-medium">{t.id}</span>{" "}
               <span className="text-sm text-gray-500">{t.name || ""}</span>
             </Link>
