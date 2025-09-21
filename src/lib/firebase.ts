@@ -1,7 +1,7 @@
-// src/lib/firebase.ts
 import { initializeApp, getApps } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
 
+// Project settings > General > Web app config'inden aldığın config:
 const firebaseConfig = {
   apiKey: "AIzaSyCKybZRK2pOX1CSsec3YXLOuHbLdzsp5uM",
   authDomain: "lazyfin-7d4fc.firebaseapp.com",
