@@ -5,6 +5,7 @@
 // - TR sayı/%, parantezli negatif, ondalık virgül parse eder
 // - "Olmayan" placeholder ve tahminleri SİLER; sayfa sadece senin verinle dolar
 
+'use client';
 import * as React from "react";
 
 /** =============================
@@ -125,9 +126,9 @@ const parsePrices = (pricesTable: TableDoc): PriceSnapshot | null => {
     [...header].reverse().find((h) => /\d{2}\.\d{2}\.\d{4}/.test(h)) ?? null;
 
   const r0 = rows[0];
-  const symbol = pick(r0, "sembol", "") as string;
-  const fiyat = parseNumberTR(pick(r0, "fiyat"));
-  const mcap = parseNumberTR(pick(r0, "piyasa_değeri"));
+  const symbol = (pick(r0, "sembol", "") ?? pick(r0, "symbol", "")) as string;
+  const fiyat = parseNumberTR(pick(r0, "fiyat") ?? pick(r0, "last"));
+  const mcap = parseNumberTR(pick(r0, "piyasa_değeri") ?? pick(r0, "mcap"));
   return { symbol, last: fiyat, mcap, lastDate: lastDateCol };
 };
 
@@ -137,7 +138,7 @@ const parseDash = (dashTable: TableDoc): DashMetric[] => {
   const out: DashMetric[] = [];
 
   for (const r of rows) {
-    const key = r["Kalem"] ?? r["kalem"] ?? r["item"] ?? null;
+    const key = r["Kalem"] ?? r["kalem"] ?? r["item"] ?? r["Key"] ?? r["key"] ?? null;
     if (!key) continue;
     const by: Record<string, number | null> = {};
     for (const p of periods) by[p] = parseNumberTR(r[p] ?? null);
@@ -167,7 +168,7 @@ const parseFinTidy = (tidy: any[]): FinPoint[] => {
 const indexFin = (pts: FinPoint[]): FinIndex => {
   const byPeriod: Record<string, FinPoint[]> = {};
   const byCode: Record<string, FinPoint[]> = {};
-  const byNameTR: Record:string, FinPoint[]> = {} as any;
+  const byNameTR: Record<string, FinPoint[]> = {};
   for (const p of pts) {
     (byPeriod[p.period] ||= []).push(p);
     if (p.code) (byCode[p.code] ||= []).push(p);
@@ -219,18 +220,17 @@ const parseKAP = (kapTable: TableDoc): KapSummary => {
 /** =============================
  *  3) DB okuyucu (yalın; çoklu path dener)
  *  ============================= */
-// Bu bölümde kendi DB istemcine bağlan.
-// Aşağıdaki "adapter" sadece örnek: getJson(path) isimli bir fonksiyonu
-// projenin veri katmanına işaret edecek şekilde uyarlaman yeterli.
-//
 // Varsayım: getJson(path) => Promise<any | null>
-// Sen Firestore/Firebase, Supabase, kendi API’n, vs. ne kullanıyorsan oraya bağla.
-// ÖNEMLİ: Kod, "yok" derse gerçekten yoktur — ama önce tüm olası path’leri dener.
-
-async function getJson(_path: string): Promise<any | null> {
-  // TODO: Burayı kendi fetch/DB okuyucunla değiştir.
-  // Örn: return (await fetch(`/api/doc?path=${encodeURIComponent(_path)}`)).json();
-  return null;
+// Burada basit bir örnek API çağrısı verdim. Kendi veri katmanına uyarla.
+async function getJson(path: string): Promise<any | null> {
+  try {
+    const res = await fetch(`/api/doc?path=${encodeURIComponent(path)}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data ?? null;
+  } catch {
+    return null;
+  }
 }
 
 const candidatePaths = (ticker: string, id: string): string[] => [
@@ -299,9 +299,9 @@ async function buildState(ticker: string): Promise<PageState> {
 
   // META
   const hasName = Boolean(
-    kap.fields?.["general.ticaret_unvani"] ||
-      kap.fields?.["summary.unvan"] ||
-      kap.fields?.["ad"]
+    (kap as any).fields?.["general.ticaret_unvani"] ||
+      (kap as any).fields?.["summary.unvan"] ||
+      (kap as any).fields?.["ad"]
   );
 
   return {
@@ -324,8 +324,8 @@ function NumberCell({ v, suf }: { v: number | null | undefined; suf?: string }) 
 
 function CompanyHeader({ state }: { state: PageState }) {
   const name =
-    (state.kap.fields["general.ticaret_unvani"] ??
-      state.kap.fields["summary.unvan"] ??
+    ((state.kap as any).fields?.["general.ticaret_unvani"] ??
+      (state.kap as any).fields?.["summary.unvan"] ??
       state.ticker) as string;
 
   return (
@@ -471,7 +471,7 @@ function FinQuick({ fin }: { fin: FinIndex }) {
 }
 
 /** =============================
- *  6) Sayfa (SSR/CSR fark etmez; burada CSR basitliği)
+ *  6) Sayfa (CSR)
  *  ============================= */
 export default function CompanyPage() {
   const [state, setState] = React.useState<PageState | null>(null);
@@ -523,16 +523,21 @@ export default function CompanyPage() {
   );
 }
 
-// Firestore örneği (Firebase v9)
-// getJson'i böyle değiştir:
-import { getFirestore, doc, getDoc } from "firebase/firestore";
-const db = getFirestore(app);
-
-async function getJson(path: string): Promise<any | null> {
-  // path "companies/AEFES/PRICES.table" gibi geliyor
-  const ref = doc(db, ...path.split("/"));
-  const snap = await getDoc(ref);
-  return snap.exists() ? (snap.data() as any) : null;
-}
-
-
+/**
+ * ===== İSTEYENE: Firestore örneği (Firebase v9) — REFERANS, AKTİF DEĞİL =====
+ * getJson'i böyle değiştirebilirsin. Aşağıyı açarsan üstteki getJson'u kaldır.
+ *
+ * import { getFirestore, doc, getDoc } from "firebase/firestore";
+ * import { app } from "@/lib/firebase"; // kendi init ettiğin app
+ * const db = getFirestore(app);
+ *
+ * async function getJson(path: string): Promise<any | null> {
+ *   try {
+ *     const ref = doc(db, ...path.split("/"));
+ *     const snap = await getDoc(ref);
+ *     return snap.exists() ? (snap.data() as any) : null;
+ *   } catch {
+ *     return null;
+ *   }
+ * }
+ */
