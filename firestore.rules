@@ -1,0 +1,9 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{db}/documents {
+    match /tickers/{ticker}/{document=**} {
+      allow read: if true;   // public read
+      allow write: if false; // sadece Functions (Admin SDK) yazar
+    }
+  }
+}
