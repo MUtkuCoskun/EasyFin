@@ -69,6 +69,8 @@ type CompanyInfo = {
   fiili_dolasim_tutar_tl?: number | null
   last: number | null
   mcap: number | null
+  /** nominal 1 TL varsayımıyla adet (paid-in TL) */
+  shares_outstanding?: number | null
 }
 
 /* ---------- META ---------- */
@@ -84,9 +86,17 @@ function toNumber(x: any): number | null {
   if (x == null) return null;
   if (typeof x === "number") return Number.isFinite(x) ? x : null;
   if (typeof x === "string") {
-    const s = x.replace(/\./g, "").replace(/,/g, ".").replace(/\s/g, "");
+    const trimmed = x.trim();
+    const neg = /^\(.*\)$/.test(trimmed); // (....) => negatif
+    const s = trimmed
+      .replace(/[()]/g, "")
+      .replace(/%/g, "")
+      .replace(/\s/g, "")
+      .replace(/\./g, "")
+      .replace(/,/g, ".");
     const n = Number(s);
-    return Number.isFinite(n) ? n : null;
+    if (!Number.isFinite(n)) return null;
+    return neg ? -n : n;
   }
   return null;
 }
@@ -142,7 +152,7 @@ async function loadMeta(ticker: string): Promise<MetaRow> {
   }
 }
 
-/** FIN.table içinden son dönemin bir kodunu (ör. "0A") döndürür */
+/** FIN.table içinden son dönemin bir kodunu (ör. "2OA") döndürür */
 async function readFinLastValue(ticker: string, code: string): Promise<number | null> {
   try {
     const fin = await adminDb.collection("tickers").doc(ticker)
@@ -212,10 +222,10 @@ async function loadCompany(ticker: string): Promise<CompanyInfo> {
     }
     if (last == null) last = c?.last ?? null;
 
-    // 2) shares: doc alanı yoksa FIN.table / 0A (Ödenmiş Sermaye) varsayımı
+    // 2) shares: doc alanı yoksa FIN.table / 2OA (Ödenmiş Sermaye) varsayımı
     let shares = c?.shares_outstanding ? Number(c.shares_outstanding) : null;
     if (!shares) {
-      const paidIn = await readFinLastValue(ticker, "0A"); // Ödenmiş Sermaye (TL)
+      const paidIn = await readFinLastValue(ticker, "2OA"); // Ödenmiş Sermaye (TL)
       if (paidIn != null) {
         shares = paidIn; // nominal 1 TL varsayımı
         console.log?.("[company] loadCompany:sharesFromFin", { paidIn });
@@ -237,7 +247,8 @@ async function loadCompany(ticker: string): Promise<CompanyInfo> {
       fiili_dolasim_oran: (c?.free_float_ratio ?? c?.fiili_dolasim_oran ?? null),
       fiili_dolasim_tutar_tl: (c?.free_float_mcap ?? c?.fiili_dolasim_tutar_tl ?? null),
       last: last ?? null,
-      mcap
+      mcap,
+      shares_outstanding: shares ?? null,
     }
     console.log?.("[company] loadCompany:derived", { last: out.last, shares, mcap: out.mcap })
     return out
@@ -592,20 +603,24 @@ export default async function Page({ params }: { params: PageParams }) {
     loadMeta(t),
   ])
 
-  // Fallback: last & mcap’i sayfada da sağlamla
+  // Fallbacklar
   const derivedLast = company.last ?? (prices.length ? prices.at(-1)!.close : null);
-  const derivedMcap = company.mcap ?? (derivedLast ? derivedLast * (ratios?.equity_value ? null as any : 1) : null); // sadece log için (asıl mcap loadCompany’de geldi)
 
-  // Ratios içinde pb/pe eksikse ve company.mcap oluştuysa tamamla
+  const price = derivedLast ?? null;
+  const shares = company.shares_outstanding ?? null;
+  const derivedMcap = company.mcap ?? (price && shares ? price * shares : null);
+
+  // Oranlar içinde pb/pe eksikse ve mcap hesaplanabildiyse tamamla
+  const mcapForRatios = derivedMcap ?? company.mcap ?? ratios?.mcap ?? null;
   const finalRatios: RatiosRow | null = ratios ? {
     ...ratios,
-    pb: ratios.pb ?? (company.mcap && ratios.equity_value ? company.mcap / ratios.equity_value : null),
-    pe_ttm: ratios.pe_ttm ?? (company.mcap && ratios.ttm_net_income ? company.mcap / ratios.ttm_net_income : null),
-    mcap: company.mcap ?? ratios.mcap ?? null,
+    mcap: mcapForRatios,
+    pb: ratios.pb ?? (mcapForRatios && ratios.equity_value ? mcapForRatios / ratios.equity_value : null),
+    pe_ttm: ratios.pe_ttm ?? (mcapForRatios && ratios.ttm_net_income ? mcapForRatios / ratios.ttm_net_income : null),
   } : null;
 
   console.log?.("[company] Page:data", {
-    company: { last: derivedLast, mcap: company.mcap },
+    company: { last: derivedLast, mcap: derivedMcap },
     prices: prices.length,
     ratios: !!finalRatios,
     series: series.length,
@@ -643,13 +658,13 @@ export default async function Page({ params }: { params: PageParams }) {
           </aside>
 
           <div className="col-span-12 lg:col-span-9">
-            <div id="company-sticky" className="sticky top={[64,72] as any} z-30">
+            <div id="company-sticky" className="sticky top-[64px] md:top-[72px] z-30">
               <CompanyHeader company={{
                 ticker: t,
                 name: company.name,
                 sector: company.sector ?? company.sektor_ana ?? company.sektor_alt,
                 website: company.internet_adresi,
-                quote: { last: derivedLast ?? undefined, currency: 'TRY', mcap: company.mcap ?? null }
+                quote: { last: price ?? undefined, currency: 'TRY', mcap: mcapForRatios }
               }} />
             </div>
 
@@ -674,8 +689,8 @@ export default async function Page({ params }: { params: PageParams }) {
                       <li><span className="opacity-70">Merkez Adresi:</span> {company.merkez_adresi ?? '—'}</li>
                       <li><span className="opacity-70">Fiili Dolaşım Oranı:</span> {fmtPct(company.fiili_dolasim_oran ?? null, 1)}</li>
                       <li><span className="opacity-70">Fiili Dolaşım Tutarı (TL):</span> {fmtNum(company.fiili_dolasim_tutar_tl ?? null, 0)}</li>
-                      <li><span className="opacity-70">Piyasa Değeri:</span> {company.mcap ? new Intl.NumberFormat('tr-TR').format(Math.round(company.mcap)) + ' ₺' : '—'}</li>
-                      <li><span className="opacity-70">Fiyat:</span> {derivedLast ? `${derivedLast.toFixed(2)} ₺` : '—'}</li>
+                      <li><span className="opacity-70">Piyasa Değeri:</span> {derivedMcap ? new Intl.NumberFormat('tr-TR').format(Math.round(derivedMcap)) + ' ₺' : '—'}</li>
+                      <li><span className="opacity-70">Fiyat:</span> {price ? `${price.toFixed(2)} ₺` : '—'}</li>
                       <li><span className="opacity-70">Halka Açıklık (META):</span> {fmtPct(ffMetaRatio, 1)}</li>
                       <li><span className="opacity-70">Piyasa Değeri (META):</span> {fmtNum(meta.market_cap ?? null, 0)} ₺</li>
                     </ul>
@@ -718,7 +733,7 @@ export default async function Page({ params }: { params: PageParams }) {
                 <div className="rounded-2xl bg-[#0F162C] border border-[#2A355B] p-5">
                   <div className="font-semibold mb-3">Fiyat (Son {prices.length} nokta)</div>
                   <MiniPriceChart data={prices} />
-                  <div className="text-xs opacity-60 mt-2">Son fiyat: {derivedLast?.toFixed(2) ?? '—'} ₺</div>
+                  <div className="text-xs opacity-60 mt-2">Son fiyat: {price?.toFixed(2) ?? '—'} ₺</div>
                 </div>
 
                 <div className="grid gap-4 md:grid-cols-2">
