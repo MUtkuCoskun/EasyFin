@@ -1,16 +1,21 @@
-import { initializeApp, getApps } from "firebase/app";
+// src/lib/firebase.ts
+import { initializeApp, getApps, FirebaseApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
 
-// Project settings > General > Web app config'inden aldığın config:
 const firebaseConfig = {
-  apiKey: "AIzaSyCKybZRK2pOX1CSsec3YXLOuHbLdzsp5uM",
-  authDomain: "lazyfin-7d4fc.firebaseapp.com",
-  projectId: "lazyfin-7d4fc",
-  storageBucket: "lazyfin-7d4fc.firebasestorage.app",
-  messagingSenderId: "722056899828",
-  appId: "1:722056899828:web:03c925b279dfc909ea82a1",
-  measurementId: "G-BG0D7L0NZW"
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  authDomain: `${process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID}.firebaseapp.com`,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: `${process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID}.appspot.com`,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
 
-const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
+let app: FirebaseApp;
+if (!getApps().length) {
+  app = initializeApp(firebaseConfig);
+} else {
+  app = getApps()[0]!;
+}
+
 export const db = getFirestore(app);
