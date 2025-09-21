@@ -627,6 +627,241 @@ export default async function Page({ params }: { params: PageParams }) {
     kap: { board: kap.board?.length ?? 0, own: kap.own?.length ?? 0 },
     meta: { hasName: !!(meta.full_name || company.name) }
   })
+/*
+ * All-in-one company data loader for Firestore pivot tables (KAP/FIN/DASH/PRICES)
+ * - Robust TR number parsing (thousands=., decimal=, and (negatives))
+ * - Pivot -> series conversion by period columns
+ * - KAP.table: flat key/value to structured object (board, ownership, raw)
+ * - FIN.tidy: shares (2OA), TTM revenue/net income, last equity book (2O)
+ * - Prices with fallback: PRICES.table -> DASH.table price rows -> first row series
+ * - Derived ratios: mcap, PE ttm, PB, net margin ttm, ROE ttm
+ *
+ * Drop-in: replace your previous loaders with loadCompanyAggregated().
+ */
+
+// ---------------------- utils/num.ts ----------------------
+export function parseTRNumber(raw: any): number | null {
+  if (raw === null || raw === undefined) return null;
+  const s = String(raw).trim();
+  if (!s || s === '-' || s === '–') return null;
+
+  const percent = s.includes('%');
+  const neg = /^\(.*\)$/.test(s);
+  let t = s.replace(/[()%]/g, '').trim();
+
+  // remove thousand sep "." and convert decimal "," to "."
+  t = t.replace(/\./g, '').replace(/,/g, '.').replace(/\s+/g, '');
+
+  if (!t || isNaN(Number(t))) return null;
+  const num = Number(t);
+  return neg ? -num : (percent ? num : num);
+}
+
+export function parseTRPercent(raw: any): number | null {
+  const n = parseTRNumber(raw);
+  return n === null ? null : n / 100;
+}
+
+// ---------------------- utils/table.ts ----------------------
+export type PivotTable = { header: string[]; rows: Array<Record<string, any>> };
+
+export function extractPeriodCols(header: string[]): string[] {
+  const labelCols = new Set(['Kalem','kod','field','ad_tr','ad_en','para_birimi','grup']);
+  return header.filter((h) => !labelCols.has(h));
+}
+
+export function findRowByLabel(
+  rows: Array<Record<string, any>>,
+  labelKeys: string[],
+  expected: string | RegExp
+): Record<string, any> | null {
+  for (const r of rows) {
+    for (const k of labelKeys) {
+      if (k in r) {
+        const v = String(r[k] ?? '').trim();
+        if (typeof expected === 'string') {
+          if (v.toLowerCase() === expected.toLowerCase()) return r;
+        } else {
+          if (expected.test(v)) return r;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+export function pivotRowToSeries(
+  row: Record<string, any>,
+  periodKeys: string[]
+): Array<{ period: string; value: number | null }> {
+  return periodKeys.map((p) => ({
+    period: p,
+    value: parseTRNumber(row[p])
+  }));
+}
+
+// ---------------------- services/firebaseCompany.ts ----------------------
+// Expect an initialized Firestore-like instance with .doc(path).get() that returns { exists, data() }
+// You can keep your existing import. Optional dependency injection supported via function params.
+// import { firestore } from './firebase';
+
+export type FirestoreLike = {
+  doc: (path: string) => { get: () => Promise<{ exists: boolean; data: () => any }> };
+};
+
+async function getTableDoc(db: FirestoreLike, path: string): Promise<PivotTable | null> {
+  const snap = await db.doc(path).get();
+  if (!snap.exists) return null;
+  const data = snap.data() as any;
+  if (!data) return null;
+  // support both shapes: { header, rows } OR everything flat in the root with header/rows
+  const header = data.header ?? data?.table?.header;
+  const rows = data.rows ?? data?.table?.rows ?? data; // some exports store rows directly
+  if (!Array.isArray(header) || !Array.isArray(rows)) return null;
+  return { header, rows };
+}
+
+// ---------- KAP LOADER ----------
+export async function loadKAP(db: FirestoreLike, ticker: string) {
+  const doc = await getTableDoc(db, `companies/${ticker}/tables/KAP.table`);
+  if (!doc) {
+    return { board: [], boardCount: 0, ownership: {}, raw: {} };
+    }
+  // Flatten into a key-value object { [field]: value }
+  const kap: Record<string, any> = {};
+  for (const r of doc.rows) {
+    if ('field' in r) kap[String(r.field)] = r.value ?? null;
+  }
+  // Group board members like board_members[3].ad_soyad
+  const board: any[] = [];
+  for (const [k, v] of Object.entries(kap)) {
+    const m = k.match(/^board_members\[(\d+)\]\.(.+)$/);
+    if (m) {
+      const idx = Number(m[1]);
+      const key = m[2];
+      board[idx] = board[idx] || {};
+      (board[idx] as any)[key] = v;
+    }
+  }
+  const boardClean = board.filter(Boolean);
+  const ownership = Object.fromEntries(
+    Object.entries(kap).filter(([k]) => k.startsWith('ownership.'))
+  );
+  return { board: boardClean, boardCount: boardClean.length, ownership, raw: kap };
+}
+
+// ---------- PRICES LOADER (with fallbacks) ----------
+export async function loadPrices(db: FirestoreLike, ticker: string) {
+  // 1) Dedicated PRICES.table
+  let doc = await getTableDoc(db, `companies/${ticker}/tables/PRICES.table`);
+  if (!doc) {
+    // 2) Fallback: DASH.table might contain price line (Fiyat/Kapanış/Close)
+    doc = await getTableDoc(db, `companies/${ticker}/tables/DASH.table`);
+  }
+  if (!doc) return { last: null as number | null, series: [] as Array<{ period: string; value: number | null }> };
+
+  const periodCols = extractPeriodCols(doc.header);
+  const row =
+    findRowByLabel(doc.rows, ['Kalem','field','ad_tr','ad_en'], /^(fiyat|kapanış|close)$/i) ||
+    findRowByLabel(doc.rows, ['Kalem','ad_tr'], /(hisse|pay).*(fiyat)/i);
+
+  if (!row) {
+    // if rowsLen===1 style, use the first row as direct series
+    const candidate = doc.rows[0] ?? {};
+    const series = pivotRowToSeries(candidate, periodCols);
+    const last = series.map(s => s.value).filter((v): v is number => v != null).at(-1) ?? null;
+    return { last, series };
+  }
+
+  const series = pivotRowToSeries(row, periodCols);
+  const last = series.map(s => s.value).filter((v): v is number => v != null).at(-1) ?? null;
+  return { last, series };
+}
+
+// ---------- FIN.tidy helpers ----------
+export async function loadSharesPaidInFromFIN(db: FirestoreLike, ticker: string) {
+  const snap = await db.doc(`companies/${ticker}/tables/FIN.tidy`).get();
+  if (!snap.exists) return null;
+  const data = snap.data();
+  const arr = Array.isArray(data?.rows) ? data.rows : (Array.isArray(data) ? data : null);
+  if (!Array.isArray(arr)) return null;
+
+  const row = arr.find((r: any) =>
+    r?.code === '2OA' || /Share\s*Capital/i.test(String(r?.ad_en || '')) || /Ödenmiş\s*Sermaye/i.test(String(r?.ad_tr || ''))
+  );
+  const num = parseTRNumber(row?.value ?? row?.['value']);
+  return num ?? null;
+}
+
+export async function loadTTMFromFIN(db: FirestoreLike, ticker: string) {
+  const snap = await db.doc(`companies/${ticker}/tables/FIN.tidy`).get();
+  if (!snap.exists) return { revenueTTM: null, netIncomeTTM: null, equityBook: null };
+  const data = snap.data();
+  const arr = Array.isArray(data?.rows) ? data.rows : (Array.isArray(data) ? data : null);
+  if (!Array.isArray(arr)) return { revenueTTM: null, netIncomeTTM: null, equityBook: null };
+
+  const sortByPeriod = (a: any, b: any) => String(a.period).localeCompare(String(b.period));
+  const last4 = (code: string) =>
+    arr.filter((r: any) => r.code === code).sort(sortByPeriod).slice(-4)
+       .map((r: any) => parseTRNumber(r.value))
+       .filter((x: number | null): x is number => x != null);
+  const sum = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) : null);
+
+  const revenueTTM = sum(last4('3C'));
+  const netIncomeTTM = sum(last4('3Z'));
+
+  const eqRows = arr.filter((r: any) => r.code === '2O').sort(sortByPeriod);
+  const equityBook = eqRows.length ? parseTRNumber(eqRows.at(-1).value) : null;
+
+  return { revenueTTM, netIncomeTTM, equityBook };
+}
+
+// ---------- Aggregator ----------
+export type CompanyAggregated = {
+  price: { last: number | null; series: Array<{ period: string; value: number | null }> };
+  shares: number | null;
+  mcap: number | null;
+  ttm: { revenueTTM: number | null; netIncomeTTM: number | null; equityBook: number | null };
+  ratios: { pe_ttm: number | null; pb: number | null; net_margin_ttm: number | null; roe_ttm_simple: number | null };
+  kap: { board: any[]; boardCount: number; ownership: Record<string, any>; raw: Record<string, any> };
+};
+
+export async function loadCompanyAggregated(db: FirestoreLike, ticker: string): Promise<CompanyAggregated> {
+  const [{ last, series }, sharesPaidIn, ttm, kap] = await Promise.all([
+    loadPrices(db, ticker),
+    loadSharesPaidInFromFIN(db, ticker),
+    loadTTMFromFIN(db, ticker),
+    loadKAP(db, ticker),
+  ]);
+
+  const shares = sharesPaidIn ?? null;
+  const mcap = last != null && shares != null ? last * shares : null;
+
+  const pe_ttm = last != null && ttm?.netIncomeTTM && shares ? (last * shares) / ttm.netIncomeTTM : null;
+  const pb = last != null && ttm?.equityBook && shares ? (last * shares) / ttm.equityBook : null;
+
+  return {
+    price: { last, series },
+    shares,
+    mcap,
+    ttm,
+    ratios: {
+      pe_ttm,
+      pb,
+      net_margin_ttm: ttm?.netIncomeTTM && ttm?.revenueTTM ? ttm.netIncomeTTM / ttm.revenueTTM : null,
+      roe_ttm_simple: ttm?.netIncomeTTM && ttm?.equityBook ? ttm.netIncomeTTM / ttm.equityBook : null,
+    },
+    kap,
+  };
+}
+
+// ---------- Page level convenience ----------
+export async function loadCompanyPage(db: FirestoreLike, ticker: string) {
+  console.info('[company] Page:start', { ticker });
+  const data = await loadCompanyAggregated(db, ticker);
+  console.info('[company] derived', { last: data.price.last ?? 0, shares: data.shares ?? null, mcap: data.mcap ?? null });
+  return data;
+}
 
   const sections = [
     { id: 'overview', title: 'Genel Bakış' },
