@@ -3,14 +3,14 @@
 // admin.initializeApp();
 // const db = admin.firestore();
 
-// YENİ:
 import { initializeApp } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
+import { getFirestore, Timestamp } from "firebase-admin/firestore"; // <-- Timestamp eklendi
 import * as functions from "firebase-functions";
 import { google } from "googleapis";
 
 initializeApp();
 const db = getFirestore();
+
 
 
 const TZ = "Europe/Istanbul";
