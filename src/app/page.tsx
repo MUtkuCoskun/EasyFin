@@ -1,41 +1,15 @@
-// src/app/page.tsx
-"use client";
-import { useEffect, useState } from "react";
-import { db } from "@/lib/firebase";
-import {
-  collection, getDocs, orderBy, limit, query,
-  Timestamp
-} from "firebase/firestore";
+// src/app/page.tsx  (SERVER)
 import Link from "next/link";
+import { adminDb } from "@/lib/firebaseAdmin";
 
-type Ticker = {
-  id: string;
-  updatedAt?: Timestamp;
-  name?: string;
-};
+export default async function HomePage() {
+  const snap = await adminDb
+    .collection("tickers")
+    .orderBy("updatedAt", "desc")
+    .limit(12)
+    .get();
 
-export default function HomePage() {
-  const [items, setItems] = useState<Ticker[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    (async () => {
-      const q = query(
-        collection(db, "tickers"),
-        orderBy("updatedAt", "desc"),
-        limit(12)
-      );
-      const snap = await getDocs(q);
-      const rows: Ticker[] = snap.docs.map(d => ({
-        id: d.id,
-        ...(d.data() as any),
-      }));
-      setItems(rows);
-      setLoading(false);
-    })();
-  }, []);
-
-  if (loading) return <div className="p-6">Yükleniyor…</div>;
+  const items = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
 
   return (
     <main className="p-6 max-w-4xl mx-auto">
@@ -45,9 +19,7 @@ export default function HomePage() {
           <li key={t.id} className="border rounded p-3 hover:bg-black/5">
             <Link href={`/${t.id}`}>
               <span className="font-medium">{t.id}</span>{" "}
-              <span className="text-sm text-gray-500">
-                {t.name ? `· ${t.name}` : ""}
-              </span>
+              <span className="text-sm text-gray-500">{t.name || ""}</span>
             </Link>
           </li>
         ))}
