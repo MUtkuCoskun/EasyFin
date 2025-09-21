@@ -3,7 +3,7 @@ import Link from 'next/link'
 import CompanyHeader from './CompanyHeader'
 import SidebarNav from './SidebarNav'
 import Section from './Section'
-import { adminDb } from "../../../lib/firebaseAdmin"; // adminDb'nin doğru şekilde initialize edildiğinden emin olun!
+import { adminDb } from "../../../lib/firebaseAdmin";
 
 export const revalidate = 120
 export const runtime = 'nodejs'
@@ -78,7 +78,11 @@ type MetaRow = {
   market_cap: number | null
 }
 
-/* ============= Helpers (SSR) ============= */
+/* ============= Debug helper ============= */
+const DBG = !!process.env.DEBUG_COMPANY_PAGE;
+const log = (...args: any[]) => { if (DBG) console.log("[company]", ...args); };
+
+/* ============= Helpers ============= */
 function toNumber(x: any): number | null {
   if (x == null) return null;
   if (typeof x === "number") return Number.isFinite(x) ? x : null;
@@ -93,22 +97,10 @@ function normPeriod(p: string): string {
   const m = String(p).match(/^(\d{4})[\/\-](\d{1,2})$/);
   return m ? `${m[1]}/${m[2].padStart(2,"0")}` : String(p);
 }
-function pickRow(rows: any[], names: string[]): any | null {
-  const arr = Array.isArray(rows) ? rows : Object.values(rows || {});
-  const want = names.map(s=>s.toLowerCase());
-  for (const r of arr) {
-    const k = (r?.Kalem || r?.kalem || r?.name || "").toString().toLowerCase();
-    if (want.includes(k)) return r;
-  }
-  for (const r of arr) {
-    const k = (r?.Kalem || r?.kalem || r?.name || "").toString().toLowerCase();
-    if (want.some(w => k.includes(w))) return r;
-  }
-  return null;
-}
 
 /* ============= Firestore loader’ları (SSR) ============= */
 async function loadMeta(ticker: string): Promise<MetaRow> {
+  log("loadMeta:start", { ticker });
   try {
     const base = adminDb.collection('tickers').doc(ticker)
     const [metaDocSnap, tickDocSnap] = await Promise.all([
@@ -117,22 +109,25 @@ async function loadMeta(ticker: string): Promise<MetaRow> {
     ])
     const m: any = metaDocSnap?.exists ? metaDocSnap.data() : {}
     const c: any = tickDocSnap?.exists ? tickDocSnap.data() : {}
+    log("loadMeta:docs", { metaExists: metaDocSnap.exists, tickExists: tickDocSnap.exists });
     return {
       full_name: (m?.full_name ?? c?.full_name) ?? null,
       description: (m?.description ?? c?.description) ?? null,
       free_float: (m?.free_float ?? c?.free_float) ?? null,
       market_cap: (m?.market_cap ?? c?.market_cap) ?? null,
     }
-  } catch (error) {
-    console.error(`[loadMeta] Error loading meta for ${ticker}:`, error);
+  } catch (e) {
+    log("loadMeta:error", e);
     return { full_name:null, description:null, free_float:null, market_cap:null }
   }
 }
 
 async function loadCompany(ticker: string): Promise<CompanyInfo> {
+  log("loadCompany:start", { ticker });
   try {
     const d = await adminDb.collection('tickers').doc(ticker).get()
     const c: any = d?.exists ? d.data() : {}
+    log("loadCompany:doc", { exists: d.exists });
 
     const ps = await adminDb
       .collection('tickers').doc(ticker)
@@ -142,6 +137,7 @@ async function loadCompany(ticker: string): Promise<CompanyInfo> {
     const last = ps?.docs?.[0]?.get('close') ?? (c?.last ?? null)
     const shares = c?.shares_outstanding ? Number(c.shares_outstanding) : null
     const mcap = (last && shares) ? (last * shares) : (c?.mcap ?? null)
+    log("loadCompany:derived", { last, shares, mcap });
 
     return {
       ticker,
@@ -158,17 +154,21 @@ async function loadCompany(ticker: string): Promise<CompanyInfo> {
       last: last ?? null,
       mcap
     }
-  } catch (error) {
-    console.error(`[loadCompany] Error loading company data for ${ticker}:`, error);
+  } catch (e) {
+    log("loadCompany:error", e);
     return { ticker, last:null, mcap:null }
   }
 }
 
 async function loadPrices(ticker: string, limit = 240): Promise<PriceRow[]> {
-  // A) tickers/{T}/prices alt koleksiyonu varsa onu kullan
+  log("loadPrices:start", { ticker, limit });
+
+  // A) tickers/{T}/prices
   try {
     const snap = await adminDb.collection("tickers").doc(ticker)
       .collection("prices").orderBy("ts","desc").limit(limit).get();
+    log("loadPrices:subcol", { empty: snap.empty, count: snap.size });
+
     if (!snap.empty) {
       const rows = snap.docs.map((d:any) => {
         const x = d.data();
@@ -181,22 +181,27 @@ async function loadPrices(ticker: string, limit = 240): Promise<PriceRow[]> {
         if (!ts || Number.isNaN(close)) return null as any;
         return { ts, close };
       }).filter(Boolean) as PriceRow[];
+      log("loadPrices:subcol:parsed", { parsed: rows.length });
       return rows.reverse();
     }
-  } catch (error) {
-    console.error(`[loadPrices A] Error loading prices from subcollection for ${ticker}:`, error);
+  } catch (e) {
+    log("loadPrices:subcol:error", e);
   }
 
-  // B) PRICES.table dokümanından oku
+  // B) PRICES.table
   try {
     const doc = await adminDb.collection("tickers").doc(ticker)
       .collection("sheets").doc("PRICES.table").get();
+    log("loadPrices:tableDoc", { exists: doc.exists });
+
     if (!doc.exists) return [];
     const data:any = doc.data();
     const header: string[] = data?.header || [];
     const rows = Object.values({ ...data, header: undefined }) as any[];
     const priceRow =
       rows.find(r => Object.keys(r).some(k => /^(close|kapanış|kapanis|price|fiyat)$/i.test(k))) || null;
+
+    log("loadPrices:tableDoc:rowPick", { headerLen: header.length, found: !!priceRow });
 
     if (!priceRow) return [];
     const out = header
@@ -209,26 +214,29 @@ async function loadPrices(ticker: string, limit = 240): Promise<PriceRow[]> {
       })
       .filter(Boolean) as PriceRow[];
 
+    log("loadPrices:tableDoc:parsed", { parsed: out.length });
     return out;
-  } catch (error) {
-    console.error(`[loadPrices B] Error loading prices from PRICES.table for ${ticker}:`, error);
+  } catch (e) {
+    log("loadPrices:tableDoc:error", e);
     return [];
   }
 }
 
 async function loadRatios(ticker: string): Promise<RatiosRow | null> {
-  // varsa hazır analytics
+  log("loadRatios:start", { ticker });
   try {
     const d = await adminDb.collection("tickers").doc(ticker)
       .collection("analytics").doc("ratios").get();
+    log("loadRatios:prefab", { exists: d.exists });
     if (d.exists) return d.data() as any;
-  } catch (error) {
-    console.error(`[loadRatios A] Error loading ratios from analytics subcollection for ${ticker}:`, error);
+  } catch (e) {
+    log("loadRatios:prefab:error", e);
   }
 
   try {
     const fin = await adminDb.collection("tickers").doc(ticker)
       .collection("sheets").doc("FIN.table").get();
+    log("loadRatios:tableDoc", { exists: fin.exists });
     if (!fin.exists) return null;
 
     const data:any = fin.data();
@@ -250,10 +258,7 @@ async function loadRatios(ticker: string): Promise<RatiosRow | null> {
     const ttm_net_income = ni ? sum(ni) : null;
     const equity_value = eq ? toNumber(eq[cols.at(-1)!]) : null;
 
-    const cd = await adminDb.collection("tickers").doc(ticker).get().catch((error)=>{
-      console.error(`[loadRatios B] Error loading ticker doc for mcap calculation for ${ticker}:`, error);
-      return null as any;
-    });
+    const cd = await adminDb.collection("tickers").doc(ticker).get().catch(()=>null as any);
     const c:any = cd?.exists ? cd.data() : {};
     const mcap = c?.mcap ?? null;
 
@@ -262,34 +267,42 @@ async function loadRatios(ticker: string): Promise<RatiosRow | null> {
     const net_margin_ttm = ttm_net_income && ttm_revenue ? ttm_net_income / ttm_revenue : null;
     const roe_ttm_simple = ttm_net_income && equity_value ? ttm_net_income / equity_value : null;
 
-    return { mcap: mcap ?? null, equity_value: equity_value ?? null,
-             ttm_net_income, ttm_revenue, pb, pe_ttm: pe,
-             net_margin_ttm, roe_ttm_simple };
-  } catch (error) {
-    console.error(`[loadRatios B] Error loading ratios from FIN.table for ${ticker}:`, error);
+    const result = { mcap: mcap ?? null, equity_value: equity_value ?? null,
+      ttm_net_income, ttm_revenue, pb, pe_ttm: pe,
+      net_margin_ttm, roe_ttm_simple };
+
+    log("loadRatios:computed", result);
+    return result;
+  } catch (e) {
+    log("loadRatios:error", e);
     return null;
   }
 }
 
 async function loadSeriesLast12(ticker: string): Promise<SeriesRow[]> {
+  log("loadSeriesLast12:start", { ticker });
   try {
     const doc = await adminDb.collection("tickers").doc(ticker)
       .collection("sheets").doc("FIN.table").get();
+    log("loadSeriesLast12:doc", { exists: doc.exists });
     if (!doc.exists) return [];
 
     const data:any = doc.data();
-    const header: string[] = (data?.header || []) as string[]; // ["kod","ad_tr","ad_en","para_birimi","grup", "2025/6", ...]
-    const cols = header.slice(5); // sadece dönem sütunları
+    const header: string[] = (data?.header || []) as string[];
+    const cols = header.slice(5);
     const rows = Object.values({ ...data, header: undefined }) as any[];
 
     const byCode = (code:string) =>
       rows.find(r => (r?.kod || r?.code || r?.Kod) === code) || null;
 
-    const rev = byCode("3C"); // Satış Gelirleri (çeyreklik)
-    const ni  = byCode("3Z"); // Ana Ortaklık Net Karı (çeyreklik)
-    const eq  = byCode("2O"); // Ana Ortaklığa Ait Özkaynaklar (nokta)
+    const rev = byCode("3C");
+    const ni  = byCode("3Z");
+    const eq  = byCode("2O");
 
-    if (!cols.length || (!rev && !ni && !eq)) return [];
+    if (!cols.length || (!rev && !ni && !eq)) {
+      log("loadSeriesLast12:emptyColsOrRows", { colsLen: cols.length, hasRev: !!rev, hasNi: !!ni, hasEq: !!eq });
+      return [];
+    }
 
     const arr: SeriesRow[] = cols.map((p:string) => ({
       period: normPeriod(p),
@@ -301,9 +314,10 @@ async function loadSeriesLast12(ticker: string): Promise<SeriesRow[]> {
       .sort((a,b)=> a.period.localeCompare(b.period))
       .slice(-12);
 
+    log("loadSeriesLast12:parsed", { parsed: arr.length });
     return arr;
-  } catch (error) {
-    console.error(`[loadSeriesLast12] Error loading series data for ${ticker}:`, error);
+  } catch (e) {
+    log("loadSeriesLast12:error", e);
     return [];
   }
 }
@@ -326,18 +340,16 @@ function findFirstByKeyRegex(obj: any, re: RegExp): string | null {
             if (inner) return inner
           }
         }
-        if (v && typeof v === 'object') stack.push(v) // Sadece obje ise ekle, string ise direk kontrol ettik
-      } catch (e) {
-        // Obje içinde regex kontrolünde hata olursa diye (nadiren)
-        console.warn(`[findFirstByKeyRegex] Error processing key ${k}:`, e);
-      }
+        if (typeof v === 'string' && re.test(v) && v.trim()) return v.trim()
+        if (v && typeof v === 'object') stack.push(v)
+      } catch {}
     }
   }
   return null
 }
 
-
 async function loadKAP(ticker: string) {
+  log("loadKAP:start", { ticker });
   try {
     const base = adminDb.collection('tickers').doc(ticker).collection('kap')
     const [boardSnap, ownSnap, subsSnap, votesSnap, k47Doc, rawDoc] = await Promise.all([
@@ -356,9 +368,15 @@ async function loadKAP(ticker: string) {
     const k47 = (k47Doc?.exists ? (k47Doc.data() as any) : {}) as K47Row
     const raw = (rawDoc?.exists ? (rawDoc.data() as any) : null) as RawKapPayload | null
     const auditFirm = raw ? (findFirstByKeyRegex(raw, /denetim|audit|bağımsız.?denetim|bagimsiz.?denetim/i) || null) : null
+
+    log("loadKAP:counts", {
+      board: board.length, own: own.length, subs: subs.length, votes: votes.length,
+      hasK47: k47Doc?.exists, hasRaw: rawDoc?.exists, auditFirm
+    });
+
     return { board, own, subs, votes, k47, raw, denetim_kurulusu: auditFirm }
-  } catch (error) {
-    console.error(`[loadKAP] Error loading KAP data for ${ticker}:`, error);
+  } catch (e) {
+    log("loadKAP:error", e);
     return { board:[], own:[], subs:[], votes:[], k47:{}, raw:null, denetim_kurulusu:null }
   }
 }
@@ -396,7 +414,7 @@ function MiniBar({ data, yKey, w = 800, h = 220 }: { data: any[]; yKey: string; 
         const rectY = v >= 0 ? y : y0
         const rectH = Math.abs(y0 - (v >= 0 ? y : yNeg))
         const fill = v >= 0 ? '#22c55e' : '#ef4444'
-        return <rect key={i} x={sx(i)} y={rectY} width={bw} height={rectH} rx="2" />
+        return <rect key={i} x={sx(i)} y={rectY} width={bw} height={rectH} fill={fill} rx="2" />
       })}
       <line x1={pad} x2={w - pad} y1={y0} y2={y0} stroke="#334155" strokeDasharray="4 4" />
     </svg>
@@ -467,6 +485,7 @@ function Details({ summary, children }: React.PropsWithChildren<{ summary: strin
 /* ================= PAGE ================= */
 export default async function Page({ params }: { params: PageParams }) {
   const t = (params.ticker || '').toUpperCase()
+  log("Page:start", { ticker: t });
 
   const [company, prices, ratios, series, kap, meta] = await Promise.all([
     loadCompany(t),
@@ -476,6 +495,14 @@ export default async function Page({ params }: { params: PageParams }) {
     loadKAP(t),
     loadMeta(t),
   ])
+  log("Page:data", {
+    company: { last: company.last, mcap: company.mcap },
+    prices: prices.length,
+    ratios: !!ratios,
+    series: series.length,
+    kap: { board: kap.board?.length ?? 0, own: kap.own?.length ?? 0 },
+    meta: { hasName: !!meta.full_name }
+  });
 
   const sections = [
     { id: 'overview', title: 'Genel Bakış' },
@@ -495,7 +522,7 @@ export default async function Page({ params }: { params: PageParams }) {
     <main className="min-h-screen relative">
       <div className="absolute inset-0 bg-gradient-to-b from-[#0B0D16] to-[#131B35]" />
       <Navbar />
-      <div className="mx-auto max-w-7xl px-4 pt={[64]} md:pt-[72px] pb-24 relative z-20">
+      <div className="mx-auto max-w-7xl px-4 pt-[64px] md:pt-[72px] pb-24 relative z-20">
         <div className="flex items-center justify-between gap-4">
           <Link href="/companies" className="text-sm text-slate-300 hover:text-white">← Şirketler</Link>
           <div />
