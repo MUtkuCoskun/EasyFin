@@ -1,53 +1,28 @@
-// src/app/companies/page.tsx
-"use client";
-import { useEffect, useMemo, useState } from "react";
-import { db } from "@/lib/firebase";
-import { collection, getDocs } from "firebase/firestore";
-import Link from "next/link";
+import Link from 'next/link'
+import { adminDb } from '../../lib/firebaseAdmin'
 
-type Row = { id: string; name?: string };
+export const revalidate = 300
 
-export default function CompaniesPage() {
-  const [rows, setRows] = useState<Row[]>([]);
-  const [q, setQ] = useState("");
-
-  useEffect(() => {
-    (async () => {
-      const snap = await getDocs(collection(db, "tickers"));
-      setRows(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
-    })();
-  }, []);
-
-  const filtered = useMemo(() => {
-    const s = q.trim().toLowerCase();
-    if (!s) return rows;
-    return rows.filter(r =>
-      r.id.toLowerCase().includes(s) ||
-      (r.name || "").toLowerCase().includes(s)
-    );
-  }, [rows, q]);
+export default async function Page() {
+  let rows: { id: string; name?: string | null }[] = []
+  try {
+    const snap = await adminDb.collection('tickers').get()
+    rows = snap.docs.map(d => {
+      const data = d.data() as any
+      return { id: d.id, name: data?.name ?? null }
+    }).sort((a,b)=> a.id.localeCompare(b.id))
+  } catch {}
 
   return (
-    <main className="p-6 max-w-5xl mx-auto">
-      <h1 className="text-2xl font-semibold mb-4">Şirketler</h1>
-
-      <input
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-        placeholder="Ara (ör. AEFES veya Anadolu Efes)"
-        className="border rounded px-3 py-2 mb-4 w-full"
-      />
-
-      <ul className="grid gap-2">
-        {filtered.map((r) => (
-          <li key={r.id} className="border rounded p-3 hover:bg-black/5">
-            <Link href={`/company/${r.id}`}>
-              <span className="font-medium">{r.id}</span>{" "}
-              <span className="text-sm text-gray-500">{r.name}</span>
-            </Link>
+    <main className="mx-auto max-w-5xl px-4 py-8">
+      <h1 className="text-2xl font-bold mb-4">Şirketler</h1>
+      <ul className="grid sm:grid-cols-2 md:grid-cols-3 gap-3">
+        {rows.map(c => (
+          <li key={c.id} className="rounded-xl border border-white/10 p-3 hover:bg-white/5">
+            <Link href={`/company/${c.id}`}>{c.id} — {c.name ?? ''}</Link>
           </li>
         ))}
       </ul>
     </main>
-  );
+  )
 }
