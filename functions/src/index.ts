@@ -92,7 +92,8 @@ async function ingestOne(fileId: string, ticker: string) {
   if (DASH.header.length)  batch.set(base.doc("DASH.table"),  DASH,  { merge: true });
   if (PRICE.header.length) batch.set(base.doc("PRICES.table"), PRICE, { merge: true });
   batch.set(db.collection("tickers").doc(ticker.toUpperCase()), {
-    updatedAt: admin.firestore.Timestamp.now()
+    updatedAt: Timestamp.now()
+
   }, { merge: true });
   await batch.commit();
 }
