@@ -1,39 +1,16 @@
 // src/lib/firebase.ts
-import fs from 'fs'
-import path from 'path'
-import admin from 'firebase-admin'
-import type { Bucket, File } from '@google-cloud/storage'
+import { initializeApp, getApps } from "firebase/app";
+import { getFirestore } from "firebase/firestore";
 
-let inited = false
+const firebaseConfig = {
+  apiKey: "AIzaSyCKybZRK2pOX1CSsec3YXLOuHbLdzsp5uM",
+  authDomain: "lazyfin-7d4fc.firebaseapp.com",
+  projectId: "lazyfin-7d4fc",
+  storageBucket: "lazyfin-7d4fc.firebasestorage.app",
+  messagingSenderId: "722056899828",
+  appId: "1:722056899828:web:03c925b279dfc909ea82a1",
+  measurementId: "G-BG0D7L0NZW"
+};
 
-function ensureInit() {
-  if (inited) return
-  const bucketName = process.env.FIREBASE_BUCKET
-  if (!bucketName) throw new Error('FIREBASE_BUCKET missing in env')
-
-  if (!admin.apps.length) {
-    // Eğer GOOGLE_APPLICATION_CREDENTIALS set ise default creds kullanır
-    if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-      admin.initializeApp({ storageBucket: bucketName })
-    } else {
-      const svcPath = path.join(process.cwd(), 'serviceAccountKey.json')
-      const svc = JSON.parse(fs.readFileSync(svcPath, 'utf8'))
-      admin.initializeApp({ credential: admin.credential.cert(svc), storageBucket: bucketName })
-    }
-  }
-  inited = true
-}
-
-export function getBucket(): Bucket {
-  ensureInit()
-  return admin.storage().bucket() // tip: Bucket
-}
-
-export async function readText(file: File): Promise<string> {
-  const [buf] = await file.download()
-  return buf.toString('utf8')
-}
-
-export async function readJson<T = any>(file: File): Promise<T> {
-  return JSON.parse(await readText(file))
-}
+const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
+export const db = getFirestore(app);
