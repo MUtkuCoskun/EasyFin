@@ -79,6 +79,33 @@ type MetaRow = {
 }
 
 /* ============= Firestore loader’ları (SSR) ============= */
+function toNumber(x: any): number | null {
+  if (x == null) return null;
+  if (typeof x === "number") return Number.isFinite(x) ? x : null;
+  if (typeof x === "string") {
+    const s = x.replace(/\./g, "").replace(/,/g, ".").replace(/\s/g, "");
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+function normPeriod(p: string): string {
+  const m = String(p).match(/^(\d{4})[\/\-](\d{1,2})$/);
+  return m ? `${m[1]}/${m[2].padStart(2,"0")}` : String(p);
+}
+function pickRow(rows: any[], names: string[]): any | null {
+  const arr = Array.isArray(rows) ? rows : Object.values(rows || {});
+  const want = names.map(s=>s.toLowerCase());
+  for (const r of arr) {
+    const k = (r?.Kalem || r?.kalem || r?.name || "").toString().toLowerCase();
+    if (want.includes(k)) return r;
+  }
+  for (const r of arr) {
+    const k = (r?.Kalem || r?.kalem || r?.name || "").toString().toLowerCase();
+    if (want.some(w => k.includes(w))) return r;
+  }
+  return null;
+}
 
 async function loadMeta(ticker: string): Promise<MetaRow> {
   try {
@@ -133,68 +160,129 @@ async function loadCompany(ticker: string): Promise<CompanyInfo> {
 }
 
 async function loadPrices(ticker: string, limit = 240): Promise<PriceRow[]> {
+  // A) tickers/{T}/prices alt koleksiyonu
   try {
-    const ref = adminDb.collection("tickers").doc(ticker).collection("prices");
-    const snap = await ref.orderBy("ts", "desc").limit(limit).get();
-    const rows: PriceRow[] = snap.docs.map((d) => {
-      const data = d.data() as any;
-      const raw = data?.ts;
-      let ts: string | null = null;
-      if (!raw) ts = null;
-      else if (typeof raw === "string") ts = raw;
-      else if (typeof raw === "number") ts = new Date(raw < 2_000_000_000 ? raw*1000 : raw).toISOString();
-      else if (raw instanceof Date) ts = raw.toISOString();
-      else if (typeof raw?.toDate === "function") ts = raw.toDate().toISOString();
-      const closeNum = Number(data?.close);
-      if (!ts || Number.isNaN(closeNum)) return null as any;
-      return { ts, close: closeNum };
+    const snap = await adminDb.collection("tickers").doc(ticker)
+      .collection("prices").orderBy("ts", "desc").limit(limit).get();
+    if (!snap.empty) {
+      const rows = snap.docs.map(d => {
+        const x:any = d.data();
+        const raw = x?.ts;
+        let ts:string|null=null;
+        if (typeof raw==='string') ts = raw;
+        else if (typeof raw==='number') ts = new Date(raw < 2_000_000_000 ? raw*1000 : raw).toISOString();
+        else if (raw?.toDate) ts = raw.toDate().toISOString();
+        const close = Number(x?.close);
+        if (!ts || Number.isNaN(close)) return null as any;
+        return { ts, close };
+      }).filter(Boolean) as PriceRow[];
+      return rows.reverse();
+    }
+  } catch {}
+
+  // B) tickers/{T}/sheets/PRICES.table (opsiyonel)
+  try {
+    const d = await adminDb.collection('tickers').doc(ticker)
+      .collection('sheets').doc('PRICES.table').get();
+    if (!d.exists) return [];
+    const obj:any = d.data();
+    const header: string[] = obj?.header || [];
+    const row = pickRow(Object.values({ ...obj, header: undefined }), [
+      'close','kapanış','kapanis','price','fiyat'
+    ]);
+    if (!row) return [];
+    const out = header.slice(-limit).map(p=>{
+      const v = toNumber(row[p]);
+      if (v==null) return null as any;
+      return { ts: normPeriod(String(p)), close: v };
     }).filter(Boolean) as PriceRow[];
-    return rows.reverse();
-  } catch { return [] }
+    return out;
+  } catch { return []; }
 }
 
+
 async function loadRatios(ticker: string): Promise<RatiosRow | null> {
+  // A) hazır analytics varsa kullan
   try {
-    const d = await adminDb.collection('tickers').doc(ticker).collection('analytics').doc('ratios').get()
-    if (!d?.exists) return null
-    const r = d.data() as any
-    return {
-      mcap: r?.mcap ?? null,
-      equity_value: r?.equity_value ?? null,
-      ttm_net_income: r?.ttm_net_income ?? null,
-      ttm_revenue: r?.ttm_revenue ?? null,
-      pb: r?.pb ?? null,
-      pe_ttm: r?.pe_ttm ?? null,
-      net_margin_ttm: r?.net_margin_ttm ?? null,
-      roe_ttm_simple: r?.roe_ttm_simple ?? null,
-    }
-  } catch { return null }
+    const d = await adminDb.collection('tickers').doc(ticker)
+      .collection('analytics').doc('ratios').get();
+    if (d.exists) return d.data() as any;
+  } catch {}
+
+  // B) DASH.table’dan TTM çıkar
+  try {
+    const doc = await adminDb.collection('tickers').doc(ticker)
+      .collection('sheets').doc('DASH.table').get();
+    if (!doc.exists) return null;
+
+    const data:any = doc.data();
+    const header: string[] = (data?.header || []) as string[];
+    const rowsObj = { ...data }; delete (rowsObj as any).header;
+
+    const rev = pickRow(Object.values(rowsObj), ['satış gelirleri','satis gelirleri','hasılat','hasilat']);
+    const ni  = pickRow(Object.values(rowsObj), ['ana ortaklık net karı','ana ortaklik net kari','net dönem kârı (zararı)','dönem kârı (zararı)']);
+    const eq  = pickRow(Object.values(rowsObj), ['ana ortaklık özkaynakları','ana ortaklik ozkaynaklari','özkaynaklar','ozkaynaklar']);
+
+    const last4 = header.slice(-4);
+    const sum = (row:any) => last4.map(p=>toNumber(row?.[p])).filter(v=>v!=null).reduce((a,b)=>a!+b!,0) || null;
+
+    const ttm_revenue = rev ? sum(rev) : null;
+    const ttm_net_income = ni ? sum(ni) : null;
+    const equity_value = eq ? toNumber(eq[header.at(-1)!]) : null;
+
+    const cd = await adminDb.collection('tickers').doc(ticker).get().catch(()=>null as any);
+    const c:any = cd?.exists ? cd.data() : {};
+    const mcap = c?.mcap ?? null;
+
+    const pb  = mcap && equity_value ? mcap / equity_value : null;
+    const pe  = mcap && ttm_net_income ? mcap / ttm_net_income : null;
+    const net_margin_ttm = ttm_net_income && ttm_revenue ? ttm_net_income / ttm_revenue : null;
+    const roe_ttm_simple = ttm_net_income && equity_value ? ttm_net_income / equity_value : null;
+
+    return { mcap: mcap ?? null, equity_value: equity_value ?? null, ttm_net_income, ttm_revenue,
+             pb, pe_ttm: pe, net_margin_ttm, roe_ttm_simple };
+  } catch { return null; }
 }
+
 
 async function loadSeriesLast12(ticker: string): Promise<SeriesRow[]> {
   try {
-    const snap = await adminDb
-      .collection('tickers').doc(ticker)
-      .collection('sheets').doc('FIN.tidy')
-      .collection('rows')
-      .where('code', 'in', ['3Z','3C','3D','3CA'])
-      .get()
+    const doc = await adminDb.collection('tickers').doc(ticker)
+      .collection('sheets').doc('DASH.table').get();
+    if (!doc.exists) return [];
 
-    const rows: any[] = snap?.docs?.map(d=>({ id: d.id, ...(d.data() as any) })) ?? []
-    const byPeriod: Record<string, SeriesRow> = {}
-    for (const r of rows) {
-      const p = String(r.period)
-      if (!byPeriod[p]) byPeriod[p] = { period: p, net_income_q: null, revenue_q: null, equity_value: null }
-      const val = r.value ?? r.val ?? null
-      if (r.code === '3Z') byPeriod[p].net_income_q = val
-      if (r.code === '3C') byPeriod[p].revenue_q = val
-      if (r.code === '3D' || r.code === '3CA') byPeriod[p].equity_value = val
+    const data:any = doc.data();
+    const header: string[] = (data?.header || []) as string[];
+    const rowsObj = { ...data }; delete (rowsObj as any).header;
+
+    // Senin şablondaki kesin etiketler:
+    const revenueRow = pickRow(Object.values(rowsObj), [
+      'satış gelirleri','satis gelirleri','hasılat','hasilat'
+    ]);
+    const niRow = pickRow(Object.values(rowsObj), [
+      'ana ortaklık net karı','ana ortaklik net kari',
+      'net dönem kârı (zararı)','dönem kârı (zararı)','donem kari (zarari)'
+    ]);
+    const equityRow = pickRow(Object.values(rowsObj), [
+      'ana ortaklık özkaynakları','ana ortaklik ozkaynaklari','özkaynaklar','ozkaynaklar'
+    ]);
+
+    const by: Record<string, SeriesRow> = {};
+    for (const rawP of header) {
+      const p = normPeriod(String(rawP));
+      if (!by[p]) by[p] = { period: p, net_income_q: null, revenue_q: null, equity_value: null };
+      if (revenueRow && rawP in revenueRow) by[p].revenue_q = toNumber(revenueRow[rawP]);
+      if (niRow && rawP in niRow)       by[p].net_income_q = toNumber(niRow[rawP]);
+      if (equityRow && rawP in equityRow) by[p].equity_value = toNumber(equityRow[rawP]);
     }
-    const arr = Object.values(byPeriod)
-    arr.sort((a,b)=> a.period.localeCompare(b.period))
-    return arr.slice(-12)
-  } catch { return [] }
+
+    return Object.values(by)
+      .filter(r => r.net_income_q!=null || r.revenue_q!=null || r.equity_value!=null)
+      .sort((a,b)=> a.period.localeCompare(b.period))
+      .slice(-12);
+  } catch { return []; }
 }
+
 
 function findFirstByKeyRegex(obj: any, re: RegExp): string | null {
   const seen = new Set<any>()
