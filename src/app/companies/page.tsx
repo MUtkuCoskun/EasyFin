@@ -41,7 +41,7 @@ export default function CompaniesPage() {
       <ul className="grid gap-2">
         {filtered.map((r) => (
           <li key={r.id} className="border rounded p-3 hover:bg-black/5">
-            <Link href={`/${r.id}`}>
+            <Link href={`/company/${r.id}`}>
               <span className="font-medium">{r.id}</span>{" "}
               <span className="text-sm text-gray-500">{r.name}</span>
             </Link>
