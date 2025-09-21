@@ -1,6 +1,6 @@
 // src/app/page.tsx  (SERVER)
 import Link from "next/link";
-import { adminDb } from "@/lib/firebaseAdmin";
+import { adminDb } from "../lib/firebaseAdmin";
 
 export default async function HomePage() {
   const snap = await adminDb
