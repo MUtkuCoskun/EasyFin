@@ -179,3 +179,14 @@ export const ingestAll = functions.pubsub
     }
     return null;
   });
+
+export const listDriveSheets = functions.https.onRequest(async (_req, res) => {
+  try {
+    const folderId = await getFolderId();
+    const files = await listSheetsInFolder(folderId);
+    res.status(200).json({ count: files.length, names: files.map(f => f.name) });
+  } catch (e:any) {
+    res.status(500).send(String(e));
+  }
+});
+
