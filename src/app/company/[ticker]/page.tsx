@@ -128,10 +128,48 @@ async function loadCompany(ticker: string): Promise<CompanyInfo> {
 }
 
 async function loadPrices(ticker: string, limit = 240): Promise<PriceRow[]> {
-const snap = await adminDb
-  .collection('tickers').doc(ticker)
-  .collection('prices')
-  .orderBy('ts','desc').limit(limit)
-  .get()
-  .catch(() => null as any)
+  try {
+    const ref = adminDb
+      .collection("tickers")
+      .doc(ticker)
+      .collection("prices");
+
+    const snap = await ref.orderBy("ts", "desc").limit(limit).get();
+
+    const rows: PriceRow[] = snap.docs
+      .map((d) => {
+        const data = d.data() as any;
+        let ts: string | null = null;
+
+        // ts tipini normalize et (string | Date | Timestamp | number)
+        const raw = data?.ts;
+        if (!raw) {
+          ts = null;
+        } else if (typeof raw === "string") {
+          ts = raw;
+        } else if (typeof raw === "number") {
+          // 10 haneliyse saniye, 13 haneliyse milisaniye varsay
+          const ms = raw < 2_000_000_000 ? raw * 1000 : raw;
+          ts = new Date(ms).toISOString();
+        } else if (raw instanceof Date) {
+          ts = raw.toISOString();
+        } else if (typeof raw.toDate === "function") {
+          // Firestore Timestamp (admin): toDate() mevcut
+          ts = raw.toDate().toISOString();
+        }
+
+        const closeNum = Number(data?.close);
+        if (!ts || Number.isNaN(closeNum)) return null;
+
+        return { ts, close: closeNum } as PriceRow;
+      })
+      .filter(Boolean) as PriceRow[];
+
+    // grafikte eski → yeni sıralama için
+    return rows.reverse();
+  } catch (err) {
+    // hata durumunda boş dön; UI güvenli kalsın
+    return [];
+  }
+}
 
