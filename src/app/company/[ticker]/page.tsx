@@ -1,872 +1,801 @@
 // src/app/company/[ticker]/page.tsx
-import React from 'react'
-import Navbar from '../../components/Navbar'
-import Link from 'next/link'
-import CompanyHeader from './CompanyHeader'
-import SidebarNav from './SidebarNav'
-import Section from './Section'
+import React from "react";
+import Link from "next/link";
+import Navbar from "../../components/Navbar";
 import { adminDb } from "../../../lib/firebaseAdmin";
 
-export const revalidate = 120
-export const runtime = 'nodejs'
+export const revalidate = 120;
+export const runtime = "nodejs";
 
-type PageParams = { ticker: string }
-type PriceRow = { ts: string; close: number }
+/* ----------------------------- Types ----------------------------- */
+type PageParams = { ticker: string };
 
-type RatiosRow = {
-  ticker?: string
-  mcap: number | null
-  equity_value: number | null
-  ttm_net_income: number | null
-  ttm_revenue: number | null
-  pb: number | null
-  pe_ttm: number | null
-  net_margin_ttm: number | null
-  roe_ttm_simple: number | null
-}
+type PriceRow = { ts: string; close: number };
+
+type CompanyDoc = {
+  name?: string;
+  sector?: string;
+  sektor_ana?: string;
+  sektor_alt?: string;
+  website?: string;
+  internet_adresi?: string;
+  market?: string;
+  islem_gordugu_pazar?: string;
+  indices?: string[];
+  dahil_oldugu_endeksler?: string[];
+  address?: string;
+  merkez_adresi?: string;
+  free_float_ratio?: number;
+  fiili_dolasim_oran?: number;
+  free_float_mcap?: number;
+  fiili_dolasim_tutar_tl?: number;
+  last?: number;
+  mcap?: number;
+  shares_outstanding?: number;
+};
+
+type MetaRow = {
+  full_name: string | null;
+  description: string | null;
+  free_float: number | null;
+  market_cap: number | null;
+};
+
+type Ratios = {
+  mcap: number | null;
+  equity_value: number | null;
+  ttm_net_income: number | null;
+  ttm_revenue: number | null;
+  pb: number | null;
+  pe_ttm: number | null;
+  net_margin_ttm: number | null; // NI/Rev (TTM)
+  roe_ttm_simple: number | null; // NI/Equity (last)
+};
 
 type SeriesRow = {
-  period: string
-  net_income_q: number | null
-  revenue_q: number | null
-  equity_value: number | null
-}
+  period: string;
+  revenue_q: number | null;
+  net_income_q: number | null;
+  equity_value: number | null;
+};
 
 type BoardRow = {
-  name: string
-  role: string | null
-  is_executive: boolean | null
-  gender: string | null
-  profession: string | null
-  first_elected: string | null
-  equity_pct: number | null
-  represented_share_group: string | null
-}
-type OwnRow = { holder: string; pct: number | null; voting_pct: number | null; paid_in_tl: number | null }
+  name: string;
+  role: string | null;
+  is_executive: boolean | null;
+  gender: string | null;
+  profession: string | null;
+  first_elected: string | null;
+  equity_pct: number | null;
+  represented_share_group: string | null;
+};
+type OwnRow = { holder: string; pct: number | null; voting_pct: number | null; paid_in_tl: number | null };
 type SubRow = {
-  company: string
-  activity: string | null
-  paid_in_capital: number | null
-  share_amount: number | null
-  currency: string | null
-  share_pct: number | null
-  relation: string | null
-}
-type VoteRow = { field: string; value: string | null }
-type K47Row = { m1?: string | null; m2?: string | null; m3?: string | null; m4?: string | null; m5?: number | null; m6?: number | null; m7?: number | null }
-type RawKapPayload = { kap?: any; bilanco?: any }
+  company: string;
+  activity: string | null;
+  paid_in_capital: number | null;
+  share_amount: number | null;
+  currency: string | null;
+  share_pct: number | null;
+  relation: string | null;
+};
+type VoteRow = { field: string; value: string | null };
+type K47Row = { m1?: string | null; m2?: string | null; m3?: string | null; m4?: string | null; m5?: number | null; m6?: number | null; m7?: number | null };
+type RawKapPayload = { kap?: any; bilanco?: any };
 
-type CompanyInfo = {
-  ticker: string
-  name?: string
-  sector?: string
-  sektor_ana?: string
-  sektor_alt?: string
-  internet_adresi?: string
-  islem_gordugu_pazar?: string
-  dahil_oldugu_endeksler?: string[] | null
-  merkez_adresi?: string
-  fiili_dolasim_oran?: number | null
-  fiili_dolasim_tutar_tl?: number | null
-  last: number | null
-  mcap: number | null
-  /** nominal 1 TL varsayımıyla adet (paid-in TL) */
-  shares_outstanding?: number | null
-}
-
-/* ---------- META ---------- */
-type MetaRow = {
-  full_name: string | null
-  description: string | null
-  free_float: number | null
-  market_cap: number | null
-}
-
-/* ===== Helpers ===== */
+/* ----------------------------- Utils ----------------------------- */
 function toNumber(x: any): number | null {
   if (x == null) return null;
   if (typeof x === "number") return Number.isFinite(x) ? x : null;
   if (typeof x === "string") {
     const trimmed = x.trim();
-    const neg = /^\(.*\)$/.test(trimmed); // (....) => negatif
-    const s = trimmed
-      .replace(/[()]/g, "")
-      .replace(/%/g, "")
-      .replace(/\s/g, "")
-      .replace(/\./g, "")
-      .replace(/,/g, ".");
+    if (!trimmed || trimmed === "-" || trimmed === "–") return null;
+    const neg = /^\(.*\)$/.test(trimmed); // (....) negatif
+    let s = trimmed.replace(/[()%]/g, "").replace(/\s+/g, "");
+    // TR style -> normalize
+    s = s.replace(/\./g, "").replace(/,/g, ".");
     const n = Number(s);
     if (!Number.isFinite(n)) return null;
     return neg ? -n : n;
   }
   return null;
 }
-function normPeriod(p: string): string {
-  const m = String(p).match(/^(\d{4})[\/\-](\d{1,2})$/);
-  return m ? `${m[1]}/${m[2].padStart(2,"0")}` : String(p);
-}
+const pct = (n: number | null | undefined) => (n == null ? null : n > 1 ? n / 100 : n);
+const fmtNum = (n?: number | null, d = 0) =>
+  n == null ? "—" : new Intl.NumberFormat("tr-TR", { maximumFractionDigits: d }).format(n);
+const fmtPct = (n?: number | null, d = 1) => (n == null ? "—" : `${(n * 100).toFixed(d)}%`);
+
 function isPlainObject(x: any): x is Record<string, any> {
-  return x && typeof x === 'object' && !Array.isArray(x);
+  return x && typeof x === "object" && !Array.isArray(x);
 }
 function getHeaderFromTableObj(table: any): string[] {
-  if (!table || typeof table !== 'object') return [];
+  if (!table || typeof table !== "object") return [];
   const cand = table.header || table.columns || table.periods || [];
   return Array.isArray(cand) ? cand.slice() : [];
 }
 function getRowsFromTableObj(table: any): Record<string, any>[] {
-  if (!table || typeof table !== 'object') return [];
+  if (!table || typeof table !== "object") return [];
   const r1 = (table as any).rows;
   if (Array.isArray(r1)) return r1.filter(isPlainObject);
   if (isPlainObject(r1)) return Object.values(r1).filter(isPlainObject);
   const r2 = (table as any).data;
   if (Array.isArray(r2)) return r2.filter(isPlainObject);
   if (isPlainObject(r2)) return Object.values(r2).filter(isPlainObject);
-  const blacklist = new Set(['header','columns','periods','rows','data']);
+  const blacklist = new Set(["header", "columns", "periods", "rows", "data"]);
   const vals = Object.entries(table)
-    .filter(([k,v]) => !blacklist.has(k) && isPlainObject(v))
-    .map(([_,v]) => v);
+    .filter(([k, v]) => !blacklist.has(k) && isPlainObject(v))
+    .map(([_, v]) => v);
   return vals.filter(isPlainObject);
 }
-
-/* ============= Firestore loader’ları (SSR) ============= */
-async function loadMeta(ticker: string): Promise<MetaRow> {
-  console.log?.("[company] loadMeta:start", { ticker });
-  try {
-    const base = adminDb.collection('tickers').doc(ticker)
-    const [metaDocSnap, tickDocSnap] = await Promise.all([
-      base.collection('meta').doc('default').get(),
-      base.get(),
-    ])
-    const m: any = metaDocSnap?.exists ? metaDocSnap.data() : {}
-    const c: any = tickDocSnap?.exists ? tickDocSnap.data() : {}
-    const out = {
-      full_name: (m?.full_name ?? c?.full_name) ?? null,
-      description: (m?.description ?? c?.description) ?? null,
-      free_float: (m?.free_float ?? c?.free_float) ?? null,
-      market_cap: (m?.market_cap ?? c?.market_cap) ?? null,
-    }
-    console.log?.("[company] loadMeta:docs", { metaExists: !!metaDocSnap?.exists, tickExists: !!tickDocSnap?.exists })
-    return out
-  } catch (e) {
-    console.log?.("[company] loadMeta:error", e)
-    return { full_name:null, description:null, free_float:null, market_cap:null }
-  }
+function normPeriod(p: string): string {
+  const m = String(p).match(/^(\d{4})[\/\-](\d{1,2})$/);
+  return m ? `${m[1]}/${m[2].padStart(2, "0")}` : String(p);
 }
 
-/** FIN.table içinden son dönemin bir kodunu (ör. "2OA") döndürür */
+/* ---------------------------- Loaders ---------------------------- */
+async function loadCompanyDoc(ticker: string): Promise<CompanyDoc & { ticker: string }> {
+  const d = await adminDb.collection("tickers").doc(ticker).get();
+  const c = (d.exists ? (d.data() as any) : {}) as CompanyDoc;
+  return { ticker, ...(c || {}) };
+}
+
 async function readFinLastValue(ticker: string, code: string): Promise<number | null> {
   try {
-    const fin = await adminDb.collection("tickers").doc(ticker)
-      .collection("sheets").doc("FIN.table").get();
+    const fin = await adminDb.collection("tickers").doc(ticker).collection("sheets").doc("FIN.table").get();
     if (!fin.exists) return null;
-    const table:any = fin.data();
+    const table: any = fin.data();
     const header = getHeaderFromTableObj(table);
     const cols = header.slice(5);
     const rows = getRowsFromTableObj(table);
-    const row = rows.find(r => (r?.kod ?? r?.code ?? r?.Kod) === code) || null;
+    const row = rows.find((r) => (r?.kod ?? r?.code ?? r?.Kod) === code) || null;
     if (!row || !cols.length) return null;
     const lastCol = cols.at(-1)!;
     return toNumber(row[lastCol]);
-  } catch (e) {
-    console.log?.("[company] readFinLastValue:error", { ticker, code, e });
+  } catch {
     return null;
   }
 }
 
-/** PRICES.table’dan son fiyatı bul */
-async function readLastPriceFromTable(ticker: string): Promise<number | null> {
+async function loadPriceSeries(ticker: string, limit = 240): Promise<{ last: number | null; series: PriceRow[] }> {
+  // 1) prices alt koleksiyonu
   try {
-    const doc = await adminDb.collection("tickers").doc(ticker)
-      .collection("sheets").doc("PRICES.table").get();
-    if (!doc.exists) return null;
-    const table:any = doc.data();
-    const header = getHeaderFromTableObj(table);
-    const rows = getRowsFromTableObj(table);
-    let priceRow = rows.find(r => {
-      const keyName = (r?.Kalem || r?.kalem || r?.name || "").toString().toLowerCase();
-      return /^(close|kapanış|kapanis|price|fiyat)$/.test(keyName);
-    }) || rows.find(r => {
-      try { return Object.keys(r).some(k => /^(close|kapanış|kapanis|price|fiyat)$/i.test(k)); }
-      catch { return false; }
-    });
-    if (!priceRow) return null;
-    const periodKeys = header.length
-      ? header.filter((p:string) => p !== "Kalem")
-      : Object.keys(priceRow).filter(k => /^\d{4}[\/\-]\d{1,2}$/.test(k));
-    for (let i = periodKeys.length - 1; i >= 0; i--) {
-      const v = toNumber(priceRow[periodKeys[i]]); // <-- fazladan parantez düzeltildi
-      if (v != null) return v;
-    }
-    return null;
-  } catch (e) {
-    console.log?.("[company] readLastPriceFromTable:error", { ticker, e });
-    return null;
-  }
-}
-
-async function loadCompany(ticker: string): Promise<CompanyInfo> {
-  console.log?.("[company] loadCompany:start", { ticker })
-  try {
-    const d = await adminDb.collection('tickers').doc(ticker).get()
-    console.log?.("[company] loadCompany:doc", { exists: d.exists })
-    const c: any = d?.exists ? d.data() : {}
-
-    // 1) last: önce alt koleksiyon, sonra PRICES.table fallback, en son doc alanı
-    let last: number | null = null;
-    try {
-      const ps = await adminDb.collection('tickers').doc(ticker)
-        .collection('prices').orderBy('ts','desc').limit(1).get()
-      last = ps?.docs?.[0]?.get('close') ?? null
-    } catch {}
-    if (last == null) {
-      last = await readLastPriceFromTable(ticker);
-    }
-    if (last == null) last = c?.last ?? null;
-
-    // 2) shares: doc alanı yoksa FIN.table / 2OA (Ödenmiş Sermaye) varsayımı
-    let shares = c?.shares_outstanding ? Number(c.shares_outstanding) : null;
-    if (!shares) {
-      const paidIn = await readFinLastValue(ticker, "2OA"); // Ödenmiş Sermaye (TL)
-      if (paidIn != null) {
-        shares = paidIn; // nominal 1 TL varsayımı
-        console.log?.("[company] loadCompany:sharesFromFin", { paidIn });
-      }
-    }
-
-    const mcap = (last && shares) ? (last * shares) : (c?.mcap ?? null)
-
-    const out: CompanyInfo = {
-      ticker,
-      name: c?.name ?? ticker,
-      sector: c?.sector ?? undefined,
-      sektor_ana: c?.sector_main ?? c?.sektor_ana ?? undefined,
-      sektor_alt: c?.sector_sub ?? c?.sektor_alt ?? undefined,
-      internet_adresi: c?.website ?? c?.internet_adresi ?? undefined,
-      islem_gordugu_pazar: c?.market ?? c?.islem_gordugu_pazar ?? undefined,
-      dahil_oldugu_endeksler: (c?.indices as string[] | null) ?? c?.dahil_oldugu_endeksler ?? null,
-      merkez_adresi: c?.address ?? c?.merkez_adresi ?? undefined,
-      fiili_dolasim_oran: (c?.free_float_ratio ?? c?.fiili_dolasim_oran ?? null),
-      fiili_dolasim_tutar_tl: (c?.free_float_mcap ?? c?.fiili_dolasim_tutar_tl ?? null),
-      last: last ?? null,
-      mcap,
-      shares_outstanding: shares ?? null,
-    }
-    console.log?.("[company] loadCompany:derived", { last: out.last, shares, mcap: out.mcap })
-    return out
-  } catch (e) {
-    console.log?.("[company] loadCompany:error", e)
-    return { ticker, last:null, mcap:null }
-  }
-}
-
-async function loadPrices(ticker: string, limit = 240): Promise<PriceRow[]> {
-  console.log?.("[company] loadPrices:start", { ticker, limit });
-
-  // A) prices alt koleksiyonu
-  try {
-    const snap = await adminDb.collection("tickers").doc(ticker)
-      .collection("prices").orderBy("ts","desc").limit(limit).get();
-    console.log?.("[company] loadPrices:subcol", { empty: snap.empty, count: snap.size });
+    const snap = await adminDb
+      .collection("tickers")
+      .doc(ticker)
+      .collection("prices")
+      .orderBy("ts", "desc")
+      .limit(limit)
+      .get();
     if (!snap.empty) {
-      const rows = snap.docs.map((d:any) => {
-        const x = d.data();
-        const raw = x?.ts;
-        let ts:string|null=null;
-        if (typeof raw === "string") ts = raw;
-        else if (typeof raw === "number") ts = new Date(raw < 2_000_000_000 ? raw*1000 : raw).toISOString();
-        else if (raw?.toDate) ts = raw.toDate().toISOString();
-        const close = Number(x?.close);
-        if (!ts || Number.isNaN(close)) return null as any;
-        return { ts, close };
-      }).filter(Boolean) as PriceRow[];
-      return rows.reverse();
+      const rows = snap.docs
+        .map((d: any) => {
+          const x = d.data();
+          const raw = x?.ts;
+          let ts: string | null = null;
+          if (typeof raw === "string") ts = raw;
+          else if (typeof raw === "number") ts = new Date(raw < 2_000_000_000 ? raw * 1000 : raw).toISOString();
+          else if (raw?.toDate) ts = raw.toDate().toISOString();
+          const close = Number(x?.close);
+          if (!ts || Number.isNaN(close)) return null as any;
+          return { ts, close };
+        })
+        .filter(Boolean) as PriceRow[];
+      const series = rows.reverse();
+      return { last: series.at(-1)?.close ?? null, series };
     }
-  } catch (e) {
-    console.log?.("[company] loadPrices:subcol:error", e);
-  }
+  } catch {}
 
-  // B) PRICES.table
+  // 2) PRICES.table fallback
   try {
-    const doc = await adminDb.collection("tickers").doc(ticker)
-      .collection("sheets").doc("PRICES.table").get();
-    console.log?.("[company] loadPrices:tableDoc", { exists: doc.exists });
-    if (!doc.exists) return [];
-
-    const table:any = doc.data();
+    const doc = await adminDb.collection("tickers").doc(ticker).collection("sheets").doc("PRICES.table").get();
+    if (!doc.exists) return { last: null, series: [] };
+    const table: any = doc.data();
     const header = getHeaderFromTableObj(table);
     const rows = getRowsFromTableObj(table);
-    console.log?.("[company] loadPrices:tableDoc:shape", { headerLen: header.length, rowsLen: rows.length });
 
-    let priceRow = rows.find(r => {
-      const keyName = (r?.Kalem || r?.kalem || r?.name || "").toString().toLowerCase();
-      return /^(close|kapanış|kapanis|price|fiyat)$/.test(keyName);
-    }) || rows.find(r => {
-      try { return Object.keys(r).some(k => /^(close|kapanış|kapanis|price|fiyat)$/i.test(k)); }
-      catch { return false; }
-    });
+    // tek satırlı tablo veya isimli satır
+    let priceRow =
+      rows.find((r) => {
+        const keyName = (r?.Kalem || r?.kalem || r?.name || "").toString().toLowerCase();
+        return /^(close|kapanış|kapanis|price|fiyat)$/.test(keyName);
+      }) ||
+      rows.find((r) => {
+        try {
+          return Object.keys(r).some((k) => /^(close|kapanış|kapanis|price|fiyat)$/i.test(k));
+        } catch {
+          return false;
+        }
+      }) ||
+      rows[0];
 
-    if (!priceRow) {
-      console.log?.("[company] loadPrices:tableDoc:noPriceRow");
-      return [];
-    }
+    if (!priceRow) return { last: null, series: [] };
 
-    const periodKeys = header.length
-      ? header.filter(p => p !== "Kalem")
-      : Object.keys(priceRow).filter(k => /^\d{4}[\/\-]\d{1,2}$/.test(k));
-
-    const out = periodKeys
+    const periodKeys = header.length ? header.filter((p: string) => p !== "Kalem") : Object.keys(priceRow);
+    const series = periodKeys
+      .filter((k) => /^\d{4}[\/\-]\d{1,2}$/.test(k))
       .slice(-limit)
-      .map((p:string) => {
+      .map((p: string) => {
         const v = toNumber(priceRow[p]);
-        if (v == null) return null as any;
-        return { ts: normPeriod(p), close: v };
+        return v == null ? null : { ts: normPeriod(p), close: v };
       })
       .filter(Boolean) as PriceRow[];
 
-    console.log?.("[company] loadPrices:tableDoc:ok", { points: out.length });
-    return out;
-  } catch (e) {
-    console.log?.("[company] loadPrices:tableDoc:error", e);
-    return [];
+    return { last: series.at(-1)?.close ?? null, series };
+  } catch {
+    return { last: null, series: [] };
   }
 }
 
-async function loadRatios(ticker: string): Promise<RatiosRow | null> {
-  console.log?.("[company] loadRatios:start", { ticker });
+async function loadFINandRatios(ticker: string): Promise<{ ratios: Ratios | null; series12: SeriesRow[] }> {
+  // hazır ratios doc varsa kullan
   try {
-    const d = await adminDb.collection("tickers").doc(ticker)
-      .collection("analytics").doc("ratios").get();
-    console.log?.("[company] loadRatios:prefab", { exists: d.exists });
-    if (d.exists) return d.data() as any;
-  } catch (e) {
-    console.log?.("[company] loadRatios:prefab:error", e);
-  }
+    const d = await adminDb.collection("tickers").doc(ticker).collection("analytics").doc("ratios").get();
+    if (d.exists) return { ratios: (d.data() as any) as Ratios, series12: [] };
+  } catch {}
 
+  // FIN.table’dan hesapla
   try {
-    const fin = await adminDb.collection("tickers").doc(ticker)
-      .collection("sheets").doc("FIN.table").get();
-    console.log?.("[company] loadRatios:tableDoc", { exists: fin.exists });
-    if (!fin.exists) return null;
-
-    const table:any = fin.data();
+    const fin = await adminDb.collection("tickers").doc(ticker).collection("sheets").doc("FIN.table").get();
+    if (!fin.exists) return { ratios: null, series12: [] };
+    const table: any = fin.data();
     const header = getHeaderFromTableObj(table);
     const cols: string[] = header.slice(5);
     const rows = getRowsFromTableObj(table);
-    console.log?.("[company] loadRatios:shape", { colsLen: cols.length, rowsLen: rows.length });
 
-    const getByCode = (code:string) =>
-      rows.find(r => (r?.kod ?? r?.code ?? r?.Kod) === code) || null;
-
+    const getByCode = (code: string) => rows.find((r) => (r?.kod ?? r?.code ?? r?.Kod) === code) || null;
     const rev = getByCode("3C"); // hasılat (çeyreklik)
-    const ni  = getByCode("3Z"); // net kâr (çeyreklik)
-    const eq  = getByCode("2O"); // özkaynak (nokta)
+    const ni = getByCode("3Z"); // net kâr (çeyreklik)
+    const eq = getByCode("2O"); // özkaynak (nokta)
 
     const last4 = cols.slice(-4);
-    const sum4 = (row:any) => {
+    const sum4 = (row: any) => {
       if (!row) return null;
-      const vals = last4.map(p => toNumber(row?.[p])).filter(v => v!=null) as number[];
-      return vals.length ? vals.reduce((a,b)=>a+b, 0) : null;
+      const vals = last4.map((p) => toNumber(row?.[p])).filter((v) => v != null) as number[];
+      return vals.length ? vals.reduce((a, b) => a + b, 0) : null;
     };
 
-    const ttm_revenue   = sum4(rev);
-    const ttm_net_income= sum4(ni);
-    const equity_value  = eq ? toNumber(eq[cols.at(-1)!]) : null;
+    const ttm_revenue = sum4(rev);
+    const ttm_net_income = sum4(ni);
+    const equity_value = eq ? toNumber(eq[cols.at(-1)!]) : null;
 
-    // mcap: doc alanı; eğer yoksa sonra Page içinde last*mümkünse dolduracağız
-    const cd = await adminDb.collection("tickers").doc(ticker).get().catch(()=>null as any);
-    const c:any = cd?.exists ? cd.data() : {};
-    const mcap = c?.mcap ?? null;
-
-    const pb  = mcap && equity_value ? mcap / equity_value : null;
-    const pe  = mcap && ttm_net_income ? mcap / ttm_net_income : null;
-    const net_margin_ttm = (ttm_net_income && ttm_revenue) ? ttm_net_income / ttm_revenue : null;
-    const roe_ttm_simple = (ttm_net_income && equity_value) ? ttm_net_income / equity_value : null;
-
-    const out = { mcap: mcap ?? null, equity_value: equity_value ?? null,
-                  ttm_net_income, ttm_revenue, pb, pe_ttm: pe,
-                  net_margin_ttm, roe_ttm_simple };
-    console.log?.("[company] loadRatios:computed", out);
-    return out;
-  } catch (e) {
-    console.log?.("[company] loadRatios:error", e);
-    return null;
-  }
-}
-
-async function loadSeriesLast12(ticker: string): Promise<SeriesRow[]> {
-  console.log?.("[company] loadSeriesLast12:start", { ticker });
-  try {
-    const doc = await adminDb.collection("tickers").doc(ticker)
-      .collection("sheets").doc("FIN.table").get();
-    console.log?.("[company] loadSeriesLast12:doc", { exists: doc.exists });
-    if (!doc.exists) return [];
-
-    const table:any = doc.data();
-    const header: string[] = getHeaderFromTableObj(table);
-    const cols = header.slice(5);
-    const rows = getRowsFromTableObj(table);
-
-    const byCode = (code:string) =>
-      rows.find(r => (r?.kod ?? r?.code ?? r?.Kod) === code) || null;
-
-    const rev = byCode("3C");
-    const ni  = byCode("3Z");
-    const eq  = byCode("2O");
-
-    const arr: SeriesRow[] = cols.map((p:string) => ({
-      period: normPeriod(p),
-      revenue_q: rev ? toNumber(rev[p]) : null,
-      net_income_q: ni ? toNumber(ni[p]) : null,
-      equity_value: eq ? toNumber(eq[p]) : null,
-    }))
-      .filter(r => r.revenue_q!=null || r.net_income_q!=null || r.equity_value!=null)
-      .sort((a,b)=> a.period.localeCompare(b.period))
+    const series12: SeriesRow[] = cols
+      .map((p) => ({
+        period: normPeriod(p),
+        revenue_q: rev ? toNumber(rev[p]) : null,
+        net_income_q: ni ? toNumber(ni[p]) : null,
+        equity_value: eq ? toNumber(eq[p]) : null,
+      }))
+      .filter((r) => r.revenue_q != null || r.net_income_q != null || r.equity_value != null)
+      .sort((a, b) => a.period.localeCompare(b.period))
       .slice(-12);
 
-    console.log?.("[company] loadSeriesLast12:ok", { points: arr.length });
-    return arr;
-  } catch (e) {
-    console.log?.("[company] loadSeriesLast12:error", e);
-    return [];
+    const ratios: Ratios = {
+      mcap: null,
+      equity_value: equity_value ?? null,
+      ttm_net_income,
+      ttm_revenue,
+      pb: null,
+      pe_ttm: null,
+      net_margin_ttm: ttm_revenue && ttm_net_income ? ttm_net_income / ttm_revenue : null,
+      roe_ttm_simple: ttm_net_income && equity_value ? ttm_net_income / equity_value : null,
+    };
+    return { ratios, series12 };
+  } catch {
+    return { ratios: null, series12: [] };
   }
 }
 
-function findFirstByKeyRegex(obj: any, re: RegExp): string | null {
-  const seen = new Set<any>()
-  const stack = [obj]
-  while (stack.length) {
-    const cur = stack.pop()
-    if (!cur || typeof cur !== 'object' || seen.has(cur)) continue
-    seen.add(cur)
-    for (const k of Object.keys(cur)) {
-      try {
-        const v = cur[k]
-        if (re.test(k)) {
-          if (typeof v === 'string' && v.trim()) return v.trim()
-          if (typeof v === 'object') {
-            const inner = findFirstByKeyRegex(v, /ad|firma|name|kuruluş|kurulus/i)
-            if (inner) return inner
-          }
-        }
-        if (typeof v === 'string' && re.test(v) && v.trim()) return v.trim()
-        if (v && typeof v === 'object') stack.push(v)
-      } catch {}
-    }
+async function loadMeta(ticker: string): Promise<MetaRow> {
+  try {
+    const base = adminDb.collection("tickers").doc(ticker);
+    const [metaDocSnap, tickDocSnap] = await Promise.all([base.collection("meta").doc("default").get(), base.get()]);
+    const m: any = metaDocSnap?.exists ? metaDocSnap.data() : {};
+    const c: any = tickDocSnap?.exists ? tickDocSnap.data() : {};
+    return {
+      full_name: (m?.full_name ?? c?.full_name ?? c?.name) ?? null,
+      description: (m?.description ?? c?.description) ?? null,
+      free_float: (m?.free_float ?? c?.free_float ?? c?.fiili_dolasim_oran ?? c?.free_float_ratio) ?? null,
+      market_cap: (m?.market_cap ?? c?.market_cap ?? c?.mcap) ?? null,
+    };
+  } catch {
+    return { full_name: null, description: null, free_float: null, market_cap: null };
   }
-  return null
 }
 
 async function loadKAP(ticker: string) {
-  console.log?.("[company] loadKAP:start", { ticker });
   try {
-    const base = adminDb.collection('tickers').doc(ticker).collection('kap')
+    const base = adminDb.collection("tickers").doc(ticker).collection("kap");
     const [boardSnap, ownSnap, subsSnap, votesSnap, k47Doc, rawDoc] = await Promise.all([
-      base.doc('board_members').collection('rows').get(),
-      base.doc('ownership').collection('rows').get(),
-      base.doc('subsidiaries').collection('rows').get(),
-      base.doc('vote_rights').collection('rows').get(),
-      base.doc('k47').get(),
-      base.doc('raw').get(),
-    ])
+      base.doc("board_members").collection("rows").get(),
+      base.doc("ownership").collection("rows").get(),
+      base.doc("subsidiaries").collection("rows").get(),
+      base.doc("vote_rights").collection("rows").get(),
+      base.doc("k47").get(),
+      base.doc("raw").get(),
+    ]);
 
-    const board = boardSnap?.docs?.map(d=>d.data()) as BoardRow[] ?? []
-    const own = ownSnap?.docs?.map(d=>d.data()) as OwnRow[] ?? []
-    const subs = subsSnap?.docs?.map(d=>d.data()) as SubRow[] ?? []
-    const votes = votesSnap?.docs?.map(d=>d.data()) as VoteRow[] ?? []
-    const k47 = (k47Doc?.exists ? (k47Doc.data() as any) : {}) as K47Row
-    const raw = (rawDoc?.exists ? (rawDoc.data() as any) : null) as RawKapPayload | null
-    const auditFirm = raw ? (findFirstByKeyRegex(raw, /denetim|audit|bağımsız.?denetim|bagimsiz.?denetim/i) || null) : null
+    const board = (boardSnap?.docs?.map((d) => d.data()) as BoardRow[]) ?? [];
+    const own = (ownSnap?.docs?.map((d) => d.data()) as OwnRow[]) ?? [];
+    const subs = (subsSnap?.docs?.map((d) => d.data()) as SubRow[]) ?? [];
+    const votes = (votesSnap?.docs?.map((d) => d.data()) as VoteRow[]) ?? [];
+    const k47 = (k47Doc?.exists ? (k47Doc.data() as any) : {}) as K47Row;
+    const raw = (rawDoc?.exists ? (rawDoc.data() as any) : null) as RawKapPayload | null;
 
-    console.log?.("[company] loadKAP:counts", {
-      board: board.length, own: own.length, subs: subs.length, votes: votes.length,
-      hasK47: !!k47Doc?.exists, hasRaw: !!rawDoc?.exists, auditFirm
-    })
-    return { board, own, subs, votes, k47, raw, denetim_kurulusu: auditFirm }
-  } catch (e) {
-    console.log?.("[company] loadKAP:error", e)
-    return { board:[], own:[], subs:[], votes:[], k47:{}, raw:null, denetim_kurulusu:null }
+    return { board, own, subs, votes, k47, raw };
+  } catch {
+    return { board: [], own: [], subs: [], votes: [], k47: {}, raw: null };
   }
 }
 
-/* ================= Mini chart helpers & UI helpers ================= */
+async function loadDASH(ticker: string): Promise<{ header: string[]; rows: any[] }> {
+  try {
+    const dash = await adminDb.collection("tickers").doc(ticker).collection("sheets").doc("DASH.table").get();
+    if (!dash.exists) return { header: [], rows: [] };
+    const table: any = dash.data();
+    return { header: getHeaderFromTableObj(table), rows: getRowsFromTableObj(table) };
+  } catch {
+    return { header: [], rows: [] };
+  }
+}
+
+/* ----------------------------- UI bits --------------------------- */
+const Section = ({ id, title, children }: React.PropsWithChildren<{ id: string; title: string }>) => (
+  <section id={id} className="scroll-mt-24">
+    <h2 className="text-xl font-semibold mb-4">{title}</h2>
+    <div className="space-y-4">{children}</div>
+  </section>
+);
+
+const Card = ({ title, children }: React.PropsWithChildren<{ title?: string }>) => (
+  <div className="rounded-2xl bg-[#0F162C] border border-[#2A355B] p-5">
+    {title ? <h3 className="font-semibold mb-3">{title}</h3> : null}
+    <div className="text-slate-300/90">{children}</div>
+  </div>
+);
+
+const Kpi = ({ label, value, sub }: { label: string; value: React.ReactNode; sub?: string }) => (
+  <div className="rounded-xl bg-[#0F162C] border border-[#2A355B] p-4">
+    <div className="text-xs opacity-70">{label}</div>
+    <div className="text-2xl font-semibold mt-1">{value}</div>
+    {sub ? <div className="text-xs opacity-60 mt-1">{sub}</div> : null}
+  </div>
+);
+
 function MiniLine({ data, yKey, w = 800, h = 220 }: { data: any[]; yKey: string; w?: number; h?: number }) {
-  const vals = data.map(d => Number(d?.[yKey] ?? NaN)).filter(v => !Number.isNaN(v))
-  if (!data?.length || !vals.length) return <div className="text-slate-400">Veri yok</div>
-  const pad = 12
-  const min = Math.min(...vals), max = Math.max(...vals)
-  const sx = (i: number) => pad + (i / Math.max(1, data.length - 1)) * (w - pad * 2)
-  const sy = (v: number) => pad + (1 - ((v - min) / ((max - min) || 1))) * (h - pad * 2)
-  const path = data.map((r, i) => {
-    const v = Number(r?.[yKey]); if (Number.isNaN(v)) return null
-    return `${i ? 'L' : 'M'} ${sx(i)} ${sy(v)}`
-  }).filter(Boolean).join(' ')
-  return <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`}>
-    <path d={path} fill="none" stroke="currentColor" strokeWidth="2" />
-  </svg>
+  const vals = data.map((d) => Number(d?.[yKey] ?? NaN)).filter((v) => !Number.isNaN(v));
+  if (!data?.length || !vals.length) return <div className="text-slate-400">Veri yok</div>;
+  const pad = 12;
+  const min = Math.min(...vals),
+    max = Math.max(...vals);
+  const sx = (i: number) => pad + (i / Math.max(1, data.length - 1)) * (w - pad * 2);
+  const sy = (v: number) => pad + (1 - (v - min) / ((max - min) || 1)) * (h - pad * 2);
+  const path = data
+    .map((r, i) => {
+      const v = Number(r?.[yKey]);
+      if (Number.isNaN(v)) return null;
+      return `${i ? "L" : "M"} ${sx(i)} ${sy(v)}`;
+    })
+    .filter(Boolean)
+    .join(" ");
+  return (
+    <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`}>
+      <path d={path} fill="none" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  );
 }
 function MiniBar({ data, yKey, w = 800, h = 220 }: { data: any[]; yKey: string; w?: number; h?: number }) {
-  const vals = data.map(d => Number(d?.[yKey] ?? NaN)).filter(v => !Number.isNaN(v))
-  if (!data?.length || !vals.length) return <div className="text-slate-400">Veri yok</div>
-  const pad = 12
-  const min = Math.min(0, ...vals), max = Math.max(0, ...vals)
-  const bw = (w - pad * 2) / data.length * 0.8
-  const sx = (i: number) => pad + (i + 0.5) * ((w - pad * 2) / data.length) - bw / 2
-  const sy = (v: number) => pad + (1 - ((v - min) / ((max - min) || 1))) * (h - pad * 2)
-  const y0 = sy(0)
+  const vals = data.map((d) => Number(d?.[yKey] ?? NaN)).filter((v) => !Number.isNaN(v));
+  if (!data?.length || !vals.length) return <div className="text-slate-400">Veri yok</div>;
+  const pad = 12;
+  const min = Math.min(0, ...vals),
+    max = Math.max(0, ...vals);
+  const bw = ((w - pad * 2) / data.length) * 0.8;
+  const sx = (i: number) => pad + (i + 0.5) * ((w - pad * 2) / data.length) - bw / 2;
+  const sy = (v: number) => pad + (1 - (v - min) / ((max - min) || 1)) * (h - pad * 2);
+  const y0 = sy(0);
   return (
     <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`}>
       {data.map((r, i) => {
-        const v = Number(r?.[yKey]); if (Number.isNaN(v)) return null
-        const y = sy(Math.max(v, 0)), yNeg = sy(Math.min(v, 0))
-        const rectY = v >= 0 ? y : y0
-        const rectH = Math.abs(y0 - (v >= 0 ? y : yNeg))
-        const fill = v >= 0 ? '#22c55e' : '#ef4444'
-        return <rect key={i} x={sx(i)} y={rectY} width={bw} height={rectH} fill={fill} rx="2" />
+        const v = Number(r?.[yKey]);
+        if (Number.isNaN(v)) return null;
+        const y = sy(Math.max(v, 0)),
+          yNeg = sy(Math.min(v, 0));
+        const rectY = v >= 0 ? y : y0;
+        const rectH = Math.abs(y0 - (v >= 0 ? y : yNeg));
+        const fill = v >= 0 ? "#22c55e" : "#ef4444";
+        return <rect key={i} x={sx(i)} y={rectY} width={bw} height={rectH} fill={fill} rx="2" />;
       })}
       <line x1={pad} x2={w - pad} y1={y0} y2={y0} stroke="#334155" strokeDasharray="4 4" />
     </svg>
-  )
+  );
 }
 function MiniPriceChart({ data, w = 800, h = 220 }: { data: PriceRow[]; w?: number; h?: number }) {
-  if (!data?.length) return <div className="text-slate-400">Veri yok</div>
-  const pad = 12, ys = data.map(d => Number(d.close))
-  const min = Math.min(...ys), max = Math.max(...ys)
-  const sx = (i: number) => pad + (i / Math.max(1, data.length - 1)) * (w - pad * 2)
-  const sy = (v: number) => pad + (1 - ((v - min) / ((max - min) || 1))) * (h - pad * 2)
-  const d = data.map((r, i) => `${i ? 'L' : 'M'} ${sx(i)} ${sy(ys[i])}`).join(' ')
-  return <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`}><path d={d} fill="none" stroke="currentColor" strokeWidth="2" /></svg>
-}
-function Card({ title, children }: React.PropsWithChildren<{ title: string }>) {
-  return <div className="rounded-2xl bg-[#0F162C] border border-[#2A355B] p-5">
-    <h3 className="font-semibold">{title}</h3>
-    <div className="mt-3 text-slate-300/90">{children}</div>
-  </div>
-}
-function Tag({ children }: React.PropsWithChildren<{}>) {
-  return <span className="inline-block text-xs px-2 py-1 rounded-full bg-white/10 border border-white/10 mr-2 mb-2">{children}</span>
-}
-function fmtNum(n?: number | null, d = 0) {
-  return (n ?? null) === null ? '—' : new Intl.NumberFormat('tr-TR', { maximumFractionDigits: d }).format(n!)
-}
-function fmtPct(n?: number | null, d = 1) {
-  return (n ?? null) === null ? '—' : `${(n! * 100).toFixed(d)}%`
-}
-function SimpleTable({
-  cols, rows, empty = 'Veri yok'
-}: { cols: { key: string; title: string; align?: 'left'|'right' }[], rows: any[], empty?: string }) {
-  if (!rows?.length) return <div className="text-slate-400">{empty}</div>
+  if (!data?.length) return <div className="text-slate-400">Veri yok</div>;
+  const pad = 12,
+    ys = data.map((d) => Number(d.close));
+  const min = Math.min(...ys),
+    max = Math.max(...ys);
+  const sx = (i: number) => pad + (i / Math.max(1, data.length - 1)) * (w - pad * 2);
+  const sy = (v: number) => pad + (1 - (v - min) / ((max - min) || 1)) * (h - pad * 2);
+  const d = data.map((r, i) => `${i ? "L" : "M"} ${sx(i)} ${sy(ys[i])}`).join(" ");
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead className="text-slate-400 border-b border-[#2A355B]">
-          <tr>
-            {cols.map((c,i) => (
-              <th key={i} className={`py-2 ${c.align==='right'?'text-right':'text-left'}`}>{c.title}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r,ri) => (
-            <tr key={ri} className="border-b border-[#141b35]">
-              {cols.map((c,ci) => (
-                <td key={ci} className={`py-2 ${c.align==='right'?'text-right':'text-left'}`}>
-                  {r[c.key] ?? '—'}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
-}
-function Details({ summary, children }: React.PropsWithChildren<{ summary: string }>) {
-  return (
-    <details className="rounded-xl border border-[#2A355B] p-4 bg-[#0F162C]/60">
-      <summary className="cursor-pointer list-none select-none">{summary}</summary>
-      <div className="mt-3">{children}</div>
-    </details>
-  )
+    <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`}>
+      <path d={d} fill="none" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  );
 }
 
-/* ================= PAGE ================= */
-
+/* ------------------------------ Page ------------------------------ */
 export default async function Page({ params }: { params: PageParams }) {
-  const t = (params.ticker || '').toUpperCase()
-  console.log?.("[company] Page:start", { ticker: t })
+  const t = (params.ticker || "").toUpperCase();
 
-  const [company, prices, ratios, series, kap, meta] = await Promise.all([
-    loadCompany(t),
-    loadPrices(t, 240),
-    loadRatios(t),
-    loadSeriesLast12(t),
+  // Paralel yükleme
+  const [{ ticker, ...c }, priceBlock, finBlock, kap, meta, dash] = await Promise.all([
+    loadCompanyDoc(t),
+    loadPriceSeries(t, 240),
+    loadFINandRatios(t),
     loadKAP(t),
     loadMeta(t),
-  ])
+    loadDASH(t),
+  ]);
 
-  // Fallbacklar
-  const derivedLast = company.last ?? (prices.length ? prices.at(-1)!.close : null);
+  const sharesPaidIn = (await readFinLastValue(t, "2OA")) ?? c.shares_outstanding ?? null; // nominal 1 TL
+  const lastFromDoc = c.last ?? null;
+  const last = priceBlock.last ?? lastFromDoc ?? null;
+  const mcapDirect = c.mcap ?? null;
+  const mcapDerived = last != null && sharesPaidIn != null ? last * sharesPaidIn : null;
+  const mcap = mcapDirect ?? mcapDerived ?? null;
 
-  const price = derivedLast ?? null;
-  const shares = company.shares_outstanding ?? null;
-  const derivedMcap = company.mcap ?? (price && shares ? price * shares : null);
+  // ratios tamamla
+  const ratios: Ratios | null = finBlock.ratios
+    ? {
+        ...finBlock.ratios,
+        mcap,
+        pb: finBlock.ratios.pb ?? (mcap && finBlock.ratios.equity_value ? mcap / finBlock.ratios.equity_value : null),
+        pe_ttm:
+          finBlock.ratios.pe_ttm ?? (mcap && finBlock.ratios.ttm_net_income ? mcap / finBlock.ratios.ttm_net_income : null),
+      }
+    : null;
 
-  // Oranlar içinde pb/pe eksikse ve mcap hesaplanabildiyse tamamla
-  const mcapForRatios = derivedMcap ?? company.mcap ?? ratios?.mcap ?? null;
-  const finalRatios: RatiosRow | null = ratios ? {
-    ...ratios,
-    mcap: mcapForRatios,
-    pb: ratios.pb ?? (mcapForRatios && ratios.equity_value ? mcapForRatios / ratios.equity_value : null),
-    pe_ttm: ratios.pe_ttm ?? (mcapForRatios && ratios.ttm_net_income ? mcapForRatios / ratios.ttm_net_income : null),
-  } : null;
+  const indices = (c.indices || c.dahil_oldugu_endeksler || []) as string[];
+  const sector = c.sector ?? c.sektor_ana ?? c.sektor_alt;
+  const website = c.website ?? c.internet_adresi;
 
-  console.log?.("[company] Page:data", {
-    company: { last: derivedLast, mcap: derivedMcap },
-    prices: prices.length,
-    ratios: !!finalRatios,
-    series: series.length,
-    kap: { board: kap.board?.length ?? 0, own: kap.own?.length ?? 0 },
-    meta: { hasName: !!(meta.full_name || company.name) }
-  })
+  // DASH'ten “öne çıkanlar” (ilk 6 metrik)
+  const dashKpis = (() => {
+    const header = dash.header || [];
+    const rows = dash.rows || [];
+    if (!rows.length) return [] as { label: string; value: string }[];
+    const labelKey = ["Kalem", "ad_tr", "ad", "field", "name"].find((k) => k in rows[0]) || "Kalem";
+    const valueKeys = header.filter((h) => h !== labelKey).slice(-1); // son kolon son dönem
+    const lastKey = valueKeys[0];
+    return rows.slice(0, 6).map((r: any) => ({
+      label: String(r[labelKey] ?? "").trim() || "—",
+      value: fmtNum(toNumber(r[lastKey])),
+    }));
+  })();
 
-  const sections = [
-    { id: 'overview', title: 'Genel Bakış' },
-    { id: 'valuation', title: 'Değerleme' },
-    { id: 'performance', title: 'Geçmiş Performans' },
-    { id: 'kap', title: 'KAP Verileri' },
-    { id: 'other', title: 'Diğer Bilgiler' },
-  ]
+  // KAP > %5 paylar
+  const fivePlus = (kap.own || []).filter((o) => (o.pct ?? 0) >= 5);
 
-  const sermaye5ustu = (kap.own || []).filter(o => (o.pct ?? 0) >= 5)
-
-  const ffMetaRatio = meta.free_float != null
-    ? (meta.free_float > 1 ? meta.free_float / 100 : meta.free_float)
-    : null
+  const ffMetaRatio = pct(meta.free_float);
 
   return (
     <main className="min-h-screen relative">
       <div className="absolute inset-0 bg-gradient-to-b from-[#0B0D16] to-[#131B35]" />
       <Navbar />
-      <div className="mx-auto max-w-7xl px-4 pt-[64px] md:pt-[72px] pb-24 relative z-20">
+
+      <div className="mx-auto max-w-7xl px-4 pt-[64px] md:pt-[72px] pb-24 relative z-10">
+        {/* Header */}
         <div className="flex items-center justify-between gap-4">
-          <Link href="/companies" className="text-sm text-slate-300 hover:text-white">← Şirketler</Link>
+          <Link href="/companies" className="text-sm text-slate-300 hover:text-white">
+            ← Şirketler
+          </Link>
           <div />
         </div>
 
-        <div className="mt-4 grid grid-cols-12 gap-6">
-          <aside className="hidden lg:block lg:col-span-3">
-            <SidebarNav sections={sections} />
-          </aside>
-
-          <div className="col-span-12 lg:col-span-9">
-            <div id="company-sticky" className="sticky top-[64px] md:top-[72px] z-30">
-              <CompanyHeader company={{
-                ticker: t,
-                name: company.name,
-                sector: company.sector ?? company.sektor_ana ?? company.sektor_alt,
-                website: company.internet_adresi,
-                quote: { last: price ?? undefined, currency: 'TRY', mcap: mcapForRatios }
-              }} />
+        <div className="mt-4 rounded-2xl border border-[#2A355B] bg-[#0F162C] p-5">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+            <div>
+              <div className="text-2xl font-semibold">{meta.full_name || c.name || t}</div>
+              <div className="text-sm text-slate-400">{sector || "—"}</div>
             </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <Kpi label="Fiyat" value={last == null ? "—" : `${last.toFixed(2)} ₺`} />
+              <Kpi label="Piyasa Değeri" value={mcap == null ? "—" : `${fmtNum(Math.round(mcap))} ₺`} />
+              <Kpi label="Halka Açıklık" value={fmtPct(ffMetaRatio, 1)} />
+              <Kpi label="Pay Adedi (Nom.)" value={fmtNum(sharesPaidIn ?? null, 0)} />
+            </div>
+          </div>
+          {website ? (
+            <div className="mt-3 text-sm">
+              Web:{" "}
+              <a className="underline" href={website} target="_blank" rel="noreferrer">
+                {website}
+              </a>
+            </div>
+          ) : null}
+          {indices?.length ? (
+            <div className="mt-2 text-xs text-slate-300/90">
+              Endeksler:{" "}
+              {indices.map((e, i) => (
+                <span key={i} className="inline-block mr-2 mb-1 rounded-full border border-white/10 bg-white/5 px-2 py-0.5">
+                  {e}
+                </span>
+              ))}
+            </div>
+          ) : null}
+        </div>
 
-            <div className="space-y-12 mt-6">
-              <Section id="overview" title="Genel Bakış">
-                <div className="grid gap-4 md:grid-cols-2">
-                  <Card title="Şirket Hakkında">
-                    <div className="space-y-2">
-                      <div className="text-base font-semibold">
-                        {meta.full_name || company.name || '—'}
-                      </div>
-                      <div className="text-sm whitespace-pre-wrap">
-                        {meta.description || '—'}
-                      </div>
-                    </div>
-                  </Card>
-                  <Card title="Kısa Bilgiler">
-                    <ul className="space-y-2 text-sm">
-                      <li><span className="opacity-70">İnternet Adresi:</span> {company.internet_adresi ? <a className="underline" href={company.internet_adresi} target="_blank" rel="noreferrer">{company.internet_adresi}</a> : '—'}</li>
-                      <li><span className="opacity-70">İşlem Gördüğü Pazar:</span> {company.islem_gordugu_pazar ?? '—'}</li>
-                      <li><span className="opacity-70">Sektör (Ana/Alt):</span> {company.sektor_ana ?? '—'} {company.sektor_alt ? ` / ${company.sektor_alt}` : ''}</li>
-                      <li><span className="opacity-70">Merkez Adresi:</span> {company.merkez_adresi ?? '—'}</li>
-                      <li><span className="opacity-70">Fiili Dolaşım Oranı:</span> {fmtPct(company.fiili_dolasim_oran ?? null, 1)}</li>
-                      <li><span className="opacity-70">Fiili Dolaşım Tutarı (TL):</span> {fmtNum(company.fiili_dolasim_tutar_tl ?? null, 0)}</li>
-                      <li><span className="opacity-70">Piyasa Değeri:</span> {derivedMcap ? new Intl.NumberFormat('tr-TR').format(Math.round(derivedMcap)) + ' ₺' : '—'}</li>
-                      <li><span className="opacity-70">Fiyat:</span> {price ? `${price.toFixed(2)} ₺` : '—'}</li>
-                      <li><span className="opacity-70">Halka Açıklık (META):</span> {fmtPct(ffMetaRatio, 1)}</li>
-                      <li><span className="opacity-70">Piyasa Değeri (META):</span> {fmtNum(meta.market_cap ?? null, 0)} ₺</li>
-                    </ul>
-                    {company.dahil_oldugu_endeksler?.length ? (
-                      <div className="mt-3">
-                        <div className="text-xs opacity-70 mb-1">Dahil Olduğu Endeksler:</div>
-                        <div>{company.dahil_oldugu_endeksler.map((e, i) => <Tag key={i}>{e}</Tag>)}</div>
-                      </div>
-                    ) : null}
-                  </Card>
-                </div>
-              </Section>
+        {/* Overview */}
+        <div className="mt-8 grid grid-cols-12 gap-6">
+          <div className="col-span-12 lg:col-span-8">
+            <Section id="price" title="Fiyat ve Performans">
+              <Card>
+                <div className="font-semibold mb-3">Fiyat (son {priceBlock.series.length} nokta)</div>
+                <MiniPriceChart data={priceBlock.series} />
+                <div className="text-xs opacity-60 mt-2">Son fiyat: {last == null ? "—" : `${last.toFixed(2)} ₺`}</div>
+              </Card>
+            </Section>
 
-              <Section id="valuation" title="Değerleme">
-                <div className="grid gap-4 md:grid-cols-5">
-                  <Card title="F/K (TTM)">
-                    <div className="text-2xl font-semibold">{fmtNum(finalRatios?.pe_ttm ?? null, 2)}</div>
-                    <div className="text-xs opacity-60 mt-1">Son 4 çeyrek net kâr toplamı ile.</div>
-                  </Card>
-                  <Card title="PD/DD (P/B)">
-                    <div className="text-2xl font-semibold">{fmtNum(finalRatios?.pb ?? null, 2)}</div>
-                    <div className="text-xs opacity-60 mt-1">Piyasa değeri / son dönem özkaynak.</div>
-                  </Card>
-                  <Card title="Net Marj (TTM)">
-                    <div className="text-2xl font-semibold">{fmtPct(finalRatios?.net_margin_ttm ?? null, 1)}</div>
-                    <div className="text-xs opacity-60 mt-1">TTM Net Kâr / TTM Hasılat.</div>
-                  </Card>
-                  <Card title="ROE (TTM, basit)">
-                    <div className="text-2xl font-semibold">{fmtPct(finalRatios?.roe_ttm_simple ?? null, 1)}</div>
-                    <div className="text-xs opacity-60 mt-1">TTM Net Kâr / Son Özkaynak.</div>
-                  </Card>
-                  <Card title="TTM Hasılat">
-                    <div className="text-2xl font-semibold">{fmtNum(finalRatios?.ttm_revenue ?? null, 0)} ₺</div>
-                    <div className="text-xs opacity-60 mt-1">Son 4 çeyrek hasılat toplamı.</div>
-                  </Card>
-                </div>
-              </Section>
+            <Section id="valuation" title="Değerleme">
+              <div className="grid gap-4 md:grid-cols-5">
+                <Kpi label="F/K (TTM)" value={fmtNum(ratios?.pe_ttm ?? null, 2)} sub="Son 4 çeyrek net kâr" />
+                <Kpi label="PD/DD (P/B)" value={fmtNum(ratios?.pb ?? null, 2)} sub="Piyasa değ./Özkaynak" />
+                <Kpi label="Net Marj (TTM)" value={fmtPct(ratios?.net_margin_ttm ?? null, 1)} sub="Net Kâr / Hasılat" />
+                <Kpi label="ROE (TTM)" value={fmtPct(ratios?.roe_ttm_simple ?? null, 1)} sub="Net Kâr / Özkaynak" />
+                <Kpi label="TTM Hasılat" value={`${fmtNum(ratios?.ttm_revenue ?? null, 0)} ₺`} sub="Son 4 çeyrek toplam" />
+              </div>
+            </Section>
 
-              <Section id="performance" title="Geçmiş Performans">
-                <div className="rounded-2xl bg-[#0F162C] border border-[#2A355B] p-5">
-                  <div className="font-semibold mb-3">Fiyat (Son {prices.length} nokta)</div>
-                  <MiniPriceChart data={prices} />
-                  <div className="text-xs opacity-60 mt-2">Son fiyat: {price?.toFixed(2) ?? '—'} ₺</div>
-                </div>
-
-                <div className="grid gap-4 md:grid-cols-2">
-                  <Card title="Net Kâr (Çeyreklik)">
-                    <MiniBar data={series.map(r => ({ y: r.net_income_q }))} yKey="y" />
-                  </Card>
-                  <Card title="Hasılat (Çeyreklik)">
-                    <MiniBar data={series.map(r => ({ y: r.revenue_q }))} yKey="y" />
-                  </Card>
-                </div>
-
-                <Card title="Özkaynak (Son 12 Çeyrek)">
-                  <MiniLine data={series.map(r => ({ y: r.equity_value }))} yKey="y" />
+            <Section id="financials" title="Finansallar (Son 12 Çeyrek)">
+              <div className="grid gap-4 md:grid-cols-2">
+                <Card title="Net Kâr (Çeyreklik)">
+                  <MiniBar data={finBlock.series12.map((r) => ({ y: r.net_income_q }))} yKey="y" />
                 </Card>
-              </Section>
+                <Card title="Hasılat (Çeyreklik)">
+                  <MiniBar data={finBlock.series12.map((r) => ({ y: r.revenue_q }))} yKey="y" />
+                </Card>
+              </div>
+              <Card title="Özkaynak (Son 12 Dönem)">
+                <MiniLine data={finBlock.series12.map((r) => ({ y: r.equity_value }))} yKey="y" />
+              </Card>
+            </Section>
 
-              <Section id="kap" title="KAP Verileri">
-                <div className="grid gap-4">
-                  <Card title="Denetim Kuruluşu">
-                    {kap.denetim_kurulusu ?? '—'}
-                  </Card>
+            <Section id="kap" title="KAP Verileri">
+              <div className="grid gap-4">
+                <Card title="≥ %5 Sermaye Payı (Özet)">
+                  {fivePlus.length ? (
+                    <ul className="text-sm space-y-2">
+                      {fivePlus.map((o, i) => (
+                        <li key={i} className="flex items-center justify-between">
+                          <span>{o.holder}</span>
+                          <span className="opacity-80">{fmtNum(o.pct ?? null, 2)}%</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    "—"
+                  )}
+                </Card>
 
-                  <Card title="≥ %5 Sermaye Payı (Özet)">
-                    {sermaye5ustu.length ? (
-                      <ul className="text-sm space-y-2">
-                        {sermaye5ustu.map((o, i) => (
-                          <li key={i} className="flex items-center justify-between">
-                            <span>{o.holder}</span>
-                            <span className="opacity-80">{fmtNum(o.pct ?? null, 2)}%</span>
-                          </li>
+                <Card title="Yönetim Kurulu">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="text-slate-400 border-b border-[#2A355B]">
+                        <tr>
+                          <th className="py-2 text-left">Ad Soyad</th>
+                          <th className="py-2 text-left">Görev</th>
+                          <th className="py-2 text-left">İcrada mı</th>
+                          <th className="py-2 text-right">Pay (%)</th>
+                          <th className="py-2 text-left">İlk Seçilme</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(kap.board || []).map((b, i) => (
+                          <tr key={i} className="border-b border-[#141b35]">
+                            <td className="py-2">{b.name ?? "—"}</td>
+                            <td className="py-2">{b.role ?? "—"}</td>
+                            <td className="py-2">{b.is_executive == null ? "—" : b.is_executive ? "Evet" : "Hayır"}</td>
+                            <td className="py-2 text-right">{b.equity_pct == null ? "—" : fmtNum(b.equity_pct, 2)}</td>
+                            <td className="py-2">{b.first_elected ?? "—"}</td>
+                          </tr>
                         ))}
-                      </ul>
-                    ) : '—'}
-                  </Card>
+                        {!kap.board?.length ? (
+                          <tr>
+                            <td colSpan={5} className="py-2 text-slate-400">
+                              Veri yok
+                            </td>
+                          </tr>
+                        ) : null}
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
 
-                  <Card title="Yönetim Kurulu (board_members)">
-                    <SimpleTable
-                      cols={[
-                        { key: 'name', title: 'Ad Soyad' },
-                        { key: 'role', title: 'Görev' },
-                        { key: 'is_executive', title: 'İcrada mı' },
-                        { key: 'equity_pct', title: 'Pay (%)', align: 'right' },
-                        { key: 'first_elected', title: 'İlk Seçilme' },
-                      ]}
-                      rows={(kap.board || []).map(b => ({
-                        name: b.name,
-                        role: b.role ?? '—',
-                        is_executive: b.is_executive == null ? '—' : (b.is_executive ? 'Evet' : 'Hayır'),
-                        equity_pct: b.equity_pct == null ? '—' : fmtNum(b.equity_pct, 2),
-                        first_elected: b.first_elected ?? '—',
-                      }))}
-                    />
-                  </Card>
+                <Card title="Ortaklık Yapısı">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="text-slate-400 border-b border-[#2A355B]">
+                        <tr>
+                          <th className="py-2 text-left">Ortak</th>
+                          <th className="py-2 text-right">Sermaye Payı (%)</th>
+                          <th className="py-2 text-right">Oy Hakkı (%)</th>
+                          <th className="py-2 text-right">Tutar (TL)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(kap.own || []).map((o, i) => (
+                          <tr key={i} className="border-b border-[#141b35]">
+                            <td className="py-2">{o.holder}</td>
+                            <td className="py-2 text-right">{o.pct == null ? "—" : fmtNum(o.pct, 2)}</td>
+                            <td className="py-2 text-right">{o.voting_pct == null ? "—" : fmtNum(o.voting_pct, 2)}</td>
+                            <td className="py-2 text-right">{o.paid_in_tl == null ? "—" : fmtNum(o.paid_in_tl, 0)}</td>
+                          </tr>
+                        ))}
+                        {!kap.own?.length ? (
+                          <tr>
+                            <td colSpan={4} className="py-2 text-slate-400">
+                              Veri yok
+                            </td>
+                          </tr>
+                        ) : null}
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
 
-                  <Card title="Ortaklık Yapısı (sermaye_5ustu)">
-                    <SimpleTable
-                      cols={[
-                        { key: 'holder', title: 'Ortak' },
-                        { key: 'pct', title: 'Sermaye Payı (%)', align: 'right' },
-                        { key: 'voting_pct', title: 'Oy Hakkı (%)', align: 'right' },
-                        { key: 'paid_in_tl', title: 'Tutar (TL)', align: 'right' },
-                      ]}
-                      rows={(kap.own || []).map(o => ({
-                        holder: o.holder,
-                        pct: o.pct == null ? '—' : fmtNum(o.pct, 2),
-                        voting_pct: o.voting_pct == null ? '—' : fmtNum(o.voting_pct, 2),
-                        paid_in_tl: o.paid_in_tl == null ? '—' : fmtNum(o.paid_in_tl, 0),
-                      }))}
-                    />
-                  </Card>
+                <Card title="Bağlı Ortaklıklar">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="text-slate-400 border-b border-[#2A355B]">
+                        <tr>
+                          <th className="py-2 text-left">Şirket</th>
+                          <th className="py-2 text-left">Faaliyet</th>
+                          <th className="py-2 text-right">Pay (%)</th>
+                          <th className="py-2 text-right">Pay Tutarı</th>
+                          <th className="py-2 text-right">Ödenmiş Sermaye</th>
+                          <th className="py-2 text-left">PB</th>
+                          <th className="py-2 text-left">İlişki</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(kap.subs || []).map((s, i) => (
+                          <tr key={i} className="border-b border-[#141b35]">
+                            <td className="py-2">{s.company}</td>
+                            <td className="py-2">{s.activity ?? "—"}</td>
+                            <td className="py-2 text-right">{s.share_pct == null ? "—" : fmtNum(s.share_pct, 2)}</td>
+                            <td className="py-2 text-right">{s.share_amount == null ? "—" : fmtNum(s.share_amount, 0)}</td>
+                            <td className="py-2 text-right">{s.paid_in_capital == null ? "—" : fmtNum(s.paid_in_capital, 0)}</td>
+                            <td className="py-2">{s.currency ?? "—"}</td>
+                            <td className="py-2">{s.relation ?? "—"}</td>
+                          </tr>
+                        ))}
+                        {!kap.subs?.length ? (
+                          <tr>
+                            <td colSpan={7} className="py-2 text-slate-400">
+                              Veri yok
+                            </td>
+                          </tr>
+                        ) : null}
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
 
-                  <Card title="Bağlı Ortaklıklar (bagli_ortakliklar)">
-                    <SimpleTable
-                      cols={[
-                        { key: 'company', title: 'Şirket' },
-                        { key: 'activity', title: 'Faaliyet' },
-                        { key: 'share_pct', title: 'Pay (%)', align: 'right' },
-                        { key: 'share_amount', title: 'Pay Tutarı', align: 'right' },
-                        { key: 'paid_in_capital', title: 'Ödenmiş Sermaye', align: 'right' },
-                        { key: 'currency', title: 'PB' },
-                        { key: 'relation', title: 'İlişki' },
-                      ]}
-                      rows={(kap.subs || []).map(s => ({
-                        company: s.company,
-                        activity: s.activity ?? '—',
-                        share_pct: s.share_pct == null ? '—' : fmtNum(s.share_pct, 2),
-                        share_amount: s.share_amount == null ? '—' : fmtNum(s.share_amount, 0),
-                        paid_in_capital: s.paid_in_capital == null ? '—' : fmtNum(s.paid_in_capital, 0),
-                        currency: s.currency ?? '—',
-                        relation: s.relation ?? '—',
-                      }))}
-                    />
-                  </Card>
+                <Card title="Oy Hakları">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="text-slate-400 border-b border-[#2A355B]">
+                        <tr>
+                          <th className="py-2 text-left">Alan</th>
+                          <th className="py-2 text-left">Değer</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(kap.votes || []).map((v, i) => (
+                          <tr key={i} className="border-b border-[#141b35]">
+                            <td className="py-2">{v.field}</td>
+                            <td className="py-2">{v.value ?? "—"}</td>
+                          </tr>
+                        ))}
+                        {!kap.votes?.length ? (
+                          <tr>
+                            <td colSpan={2} className="py-2 text-slate-400">
+                              Veri yok
+                            </td>
+                          </tr>
+                        ) : null}
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
 
-                  <Card title="Oy Hakları (oy_haklari)">
-                    <SimpleTable
-                      cols={[
-                        { key: 'field', title: 'Alan' },
-                        { key: 'value', title: 'Değer' },
-                      ]}
-                      rows={(kap.votes || []).map(v => ({ field: v.field, value: v.value ?? '—' }))}
-                    />
-                  </Card>
+                <Card title="SPK Kurumsal Yönetim (4.7)">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="text-slate-400 border-b border-[#2A355B]">
+                        <tr>
+                          <th className="py-2">M1</th>
+                          <th className="py-2">M2</th>
+                          <th className="py-2">M3</th>
+                          <th className="py-2">M4</th>
+                          <th className="py-2 text-right">M5</th>
+                          <th className="py-2 text-right">M6</th>
+                          <th className="py-2 text-right">M7</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr>
+                          <td className="py-2">{kap.k47?.m1 ?? "—"}</td>
+                          <td className="py-2">{kap.k47?.m2 ?? "—"}</td>
+                          <td className="py-2">{kap.k47?.m3 ?? "—"}</td>
+                          <td className="py-2">{kap.k47?.m4 ?? "—"}</td>
+                          <td className="py-2 text-right">{kap.k47?.m5 == null ? "—" : fmtNum(kap.k47?.m5, 2)}</td>
+                          <td className="py-2 text-right">{kap.k47?.m6 == null ? "—" : fmtNum(kap.k47?.m6, 2)}</td>
+                          <td className="py-2 text-right">{kap.k47?.m7 == null ? "—" : fmtNum(kap.k47?.m7, 2)}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
 
-                  <Card title="SPK Kurumsal Yönetim (4.7)">
-                    <SimpleTable
-                      cols={[
-                        { key: 'm1', title: 'M1' },
-                        { key: 'm2', title: 'M2' },
-                        { key: 'm3', title: 'M3' },
-                        { key: 'm4', title: 'M4' },
-                        { key: 'm5', title: 'M5', align: 'right' },
-                        { key: 'm6', title: 'M6', align: 'right' },
-                        { key: 'm7', title: 'M7', align: 'right' },
-                      ]}
-                      rows={[kap.k47 ?? {}]}
-                    />
-                  </Card>
+                <details className="rounded-xl border border-[#2A355B] p-4 bg-[#0F162C]/60">
+                  <summary className="cursor-pointer list-none select-none">Ham KAP JSON (debug)</summary>
+                  <pre className="text-xs overflow-x-auto whitespace-pre-wrap mt-3">
+                    {JSON.stringify(kap.raw?.kap ?? kap.raw ?? {}, null, 2)}
+                  </pre>
+                </details>
+              </div>
+            </Section>
+          </div>
 
-                  <Details summary="Ham KAP JSON (debug/şeffaflık)">
-                    <pre className="text-xs overflow-x-auto whitespace-pre-wrap">{JSON.stringify(kap.raw?.kap ?? kap.raw ?? {}, null, 2)}</pre>
-                  </Details>
+          <div className="col-span-12 lg:col-span-4">
+            <Section id="about" title="Özet ve Kısa Bilgiler">
+              <Card title="Şirket Hakkında">
+                <div className="text-sm whitespace-pre-wrap">{meta.description || "—"}</div>
+              </Card>
+              <Card title="Kısa Bilgiler">
+                <ul className="space-y-2 text-sm">
+                  <li>
+                    <span className="opacity-70">İnternet Adresi:</span>{" "}
+                    {website ? (
+                      <a className="underline" href={website} target="_blank" rel="noreferrer">
+                        {website}
+                      </a>
+                    ) : (
+                      "—"
+                    )}
+                  </li>
+                  <li>
+                    <span className="opacity-70">Pazar:</span> {c.islem_gordugu_pazar ?? c.market ?? "—"}
+                  </li>
+                  <li>
+                    <span className="opacity-70">Merkez:</span> {c.merkez_adresi ?? c.address ?? "—"}
+                  </li>
+                  <li>
+                    <span className="opacity-70">Fiili Dolaşım:</span> {fmtPct(pct(c.fiili_dolasim_oran ?? c.free_float_ratio ?? null), 1)}
+                  </li>
+                  <li>
+                    <span className="opacity-70">Fiili Dolaşım Tutarı:</span> {fmtNum(c.fiili_dolasim_tutar_tl ?? c.free_float_mcap ?? null, 0)} ₺
+                  </li>
+                  <li>
+                    <span className="opacity-70">Piyasa Değeri (META):</span> {fmtNum(meta.market_cap ?? null, 0)} ₺
+                  </li>
+                </ul>
+              </Card>
+
+              <Section id="dash" title="DASH — Öne Çıkanlar">
+                <div className="grid gap-3 md:grid-cols-2">
+                  {dashKpis.length
+                    ? dashKpis.map((k, i) => <Kpi key={i} label={k.label} value={k.value} />)
+                    : [<div key="empty" className="text-slate-400">Veri yok</div>]}
                 </div>
               </Section>
-
-              <Section id="other" title="Diğer Bilgiler">
-                <Card title="Notlar">KAP duyuruları ve temettü (CA) burada listelenecek.</Card>
-              </Section>
-            </div>
+            </Section>
           </div>
         </div>
       </div>
     </main>
-  )
+  );
 }
