@@ -36,6 +36,9 @@ jobs:
 
       - name: Deploy Firestore rules
         run: firebase deploy --project ${{ secrets.GCP_PROJECT_ID }} --only firestore:rules
+      - name: Set Functions runtime config (easyfin.folder_id)
+
+        run: firebase functions:config:set easyfin.folder_id="${{ secrets.EASYFIN_FOLDER_ID }}" --project ${{ secrets.GCP_PROJECT_ID }}
 
       - name: Deploy Cloud Functions
         env:
