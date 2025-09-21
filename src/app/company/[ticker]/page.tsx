@@ -522,3 +522,17 @@ export default function CompanyPage() {
     </div>
   );
 }
+
+// Firestore örneği (Firebase v9)
+// getJson'i böyle değiştir:
+import { getFirestore, doc, getDoc } from "firebase/firestore";
+const db = getFirestore(app);
+
+async function getJson(path: string): Promise<any | null> {
+  // path "companies/AEFES/PRICES.table" gibi geliyor
+  const ref = doc(db, ...path.split("/"));
+  const snap = await getDoc(ref);
+  return snap.exists() ? (snap.data() as any) : null;
+}
+
+
