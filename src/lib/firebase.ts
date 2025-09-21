@@ -1,21 +1,20 @@
-// src/lib/firebase.ts
-import { initializeApp, getApps, FirebaseApp } from "firebase/app";
-import { getFirestore } from "firebase/firestore";
+// src/lib/firebaseAdmin.ts
+import { getApps, initializeApp, cert } from "firebase-admin/app";
+import { getFirestore } from "firebase-admin/firestore";
 
-const firebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-  authDomain: `${process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID}.firebaseapp.com`,
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: `${process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID}.appspot.com`,
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
-};
+let app = getApps()[0];
+if (!app) {
+  const saJson = process.env.FIREBASE_SERVICE_ACCOUNT; // Vercel Secret (JSON string)
+  if (!saJson) throw new Error("FIREBASE_SERVICE_ACCOUNT env not set");
+  const creds = JSON.parse(saJson);
 
-let app: FirebaseApp;
-if (!getApps().length) {
-  app = initializeApp(firebaseConfig);
-} else {
-  app = getApps()[0]!;
+  app = initializeApp({
+    credential: cert({
+      projectId: creds.project_id,
+      clientEmail: creds.client_email,
+      privateKey: creds.private_key,
+    }),
+  });
 }
 
-export const db = getFirestore(app);
+export const adminDb = getFirestore(app);
