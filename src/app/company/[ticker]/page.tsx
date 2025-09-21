@@ -1,3 +1,4 @@
+// src/app/company/[ticker]/page.tsx
 import Navbar from '../../components/Navbar'
 import Link from 'next/link'
 import CompanyHeader from './CompanyHeader'
@@ -78,11 +79,7 @@ type MetaRow = {
   market_cap: number | null
 }
 
-/* ============= Debug helper ============= */
-const DBG = !!process.env.DEBUG_COMPANY_PAGE;
-const log = (...args: any[]) => { if (DBG) console.log("[company]", ...args); };
-
-/* ============= Helpers ============= */
+/* ===== Helpers (sayı/period) ===== */
 function toNumber(x: any): number | null {
   if (x == null) return null;
   if (typeof x === "number") return Number.isFinite(x) ? x : null;
@@ -98,9 +95,40 @@ function normPeriod(p: string): string {
   return m ? `${m[1]}/${m[2].padStart(2,"0")}` : String(p);
 }
 
+/* ===== SAFE TABLE HELPERS (esnek şema) ===== */
+function isPlainObject(x: any): x is Record<string, any> {
+  return x && typeof x === 'object' && !Array.isArray(x);
+}
+
+function getHeaderFromTableObj(table: any): string[] {
+  if (!table || typeof table !== 'object') return [];
+  const cand = table.header || table.columns || table.periods || [];
+  return Array.isArray(cand) ? cand.slice() : [];
+}
+
+function getRowsFromTableObj(table: any): Record<string, any>[] {
+  if (!table || typeof table !== 'object') return [];
+  // 1) rows alanı
+  const r1 = (table as any).rows;
+  if (Array.isArray(r1)) return r1.filter(isPlainObject);
+  if (isPlainObject(r1)) return Object.values(r1).filter(isPlainObject);
+
+  // 2) data alanı
+  const r2 = (table as any).data;
+  if (Array.isArray(r2)) return r2.filter(isPlainObject);
+  if (isPlainObject(r2)) return Object.values(r2).filter(isPlainObject);
+
+  // 3) fallback: header dışındaki alanlardan derle
+  const blacklist = new Set(['header','columns','periods','rows','data']);
+  const vals = Object.entries(table)
+    .filter(([k,v]) => !blacklist.has(k) && isPlainObject(v))
+    .map(([_,v]) => v);
+  return vals.filter(isPlainObject);
+}
+
 /* ============= Firestore loader’ları (SSR) ============= */
 async function loadMeta(ticker: string): Promise<MetaRow> {
-  log("loadMeta:start", { ticker });
+  console.log?.("[company] loadMeta:start", { ticker });
   try {
     const base = adminDb.collection('tickers').doc(ticker)
     const [metaDocSnap, tickDocSnap] = await Promise.all([
@@ -109,25 +137,26 @@ async function loadMeta(ticker: string): Promise<MetaRow> {
     ])
     const m: any = metaDocSnap?.exists ? metaDocSnap.data() : {}
     const c: any = tickDocSnap?.exists ? tickDocSnap.data() : {}
-    log("loadMeta:docs", { metaExists: metaDocSnap.exists, tickExists: tickDocSnap.exists });
-    return {
+    const out = {
       full_name: (m?.full_name ?? c?.full_name) ?? null,
       description: (m?.description ?? c?.description) ?? null,
       free_float: (m?.free_float ?? c?.free_float) ?? null,
       market_cap: (m?.market_cap ?? c?.market_cap) ?? null,
     }
+    console.log?.("[company] loadMeta:docs", { metaExists: !!metaDocSnap?.exists, tickExists: !!tickDocSnap?.exists })
+    return out
   } catch (e) {
-    log("loadMeta:error", e);
+    console.log?.("[company] loadMeta:error", e)
     return { full_name:null, description:null, free_float:null, market_cap:null }
   }
 }
 
 async function loadCompany(ticker: string): Promise<CompanyInfo> {
-  log("loadCompany:start", { ticker });
+  console.log?.("[company] loadCompany:start", { ticker })
   try {
     const d = await adminDb.collection('tickers').doc(ticker).get()
+    console.log?.("[company] loadCompany:doc", { exists: d.exists })
     const c: any = d?.exists ? d.data() : {}
-    log("loadCompany:doc", { exists: d.exists });
 
     const ps = await adminDb
       .collection('tickers').doc(ticker)
@@ -137,9 +166,8 @@ async function loadCompany(ticker: string): Promise<CompanyInfo> {
     const last = ps?.docs?.[0]?.get('close') ?? (c?.last ?? null)
     const shares = c?.shares_outstanding ? Number(c.shares_outstanding) : null
     const mcap = (last && shares) ? (last * shares) : (c?.mcap ?? null)
-    log("loadCompany:derived", { last, shares, mcap });
 
-    return {
+    const out: CompanyInfo = {
       ticker,
       name: c?.name ?? ticker,
       sector: c?.sector ?? undefined,
@@ -154,21 +182,22 @@ async function loadCompany(ticker: string): Promise<CompanyInfo> {
       last: last ?? null,
       mcap
     }
+    console.log?.("[company] loadCompany:derived", { last: out.last, shares, mcap: out.mcap })
+    return out
   } catch (e) {
-    log("loadCompany:error", e);
+    console.log?.("[company] loadCompany:error", e)
     return { ticker, last:null, mcap:null }
   }
 }
 
 async function loadPrices(ticker: string, limit = 240): Promise<PriceRow[]> {
-  log("loadPrices:start", { ticker, limit });
+  console.log?.("[company] loadPrices:start", { ticker, limit });
 
-  // A) tickers/{T}/prices
+  // A) tickers/{T}/prices alt koleksiyonu
   try {
     const snap = await adminDb.collection("tickers").doc(ticker)
       .collection("prices").orderBy("ts","desc").limit(limit).get();
-    log("loadPrices:subcol", { empty: snap.empty, count: snap.size });
-
+    console.log?.("[company] loadPrices:subcol", { empty: snap.empty, count: snap.size });
     if (!snap.empty) {
       const rows = snap.docs.map((d:any) => {
         const x = d.data();
@@ -181,31 +210,43 @@ async function loadPrices(ticker: string, limit = 240): Promise<PriceRow[]> {
         if (!ts || Number.isNaN(close)) return null as any;
         return { ts, close };
       }).filter(Boolean) as PriceRow[];
-      log("loadPrices:subcol:parsed", { parsed: rows.length });
       return rows.reverse();
     }
   } catch (e) {
-    log("loadPrices:subcol:error", e);
+    console.log?.("[company] loadPrices:subcol:error", e);
   }
 
-  // B) PRICES.table
+  // B) PRICES.table (geniş tablo)
   try {
     const doc = await adminDb.collection("tickers").doc(ticker)
       .collection("sheets").doc("PRICES.table").get();
-    log("loadPrices:tableDoc", { exists: doc.exists });
-
+    console.log?.("[company] loadPrices:tableDoc", { exists: doc.exists });
     if (!doc.exists) return [];
-    const data:any = doc.data();
-    const header: string[] = data?.header || [];
-    const rows = Object.values({ ...data, header: undefined }) as any[];
-    const priceRow =
-      rows.find(r => Object.keys(r).some(k => /^(close|kapanış|kapanis|price|fiyat)$/i.test(k))) || null;
 
-    log("loadPrices:tableDoc:rowPick", { headerLen: header.length, found: !!priceRow });
+    const table:any = doc.data();
+    const header = getHeaderFromTableObj(table);
+    const rows = getRowsFromTableObj(table);
+    console.log?.("[company] loadPrices:tableDoc:shape", { headerLen: header.length, rowsLen: rows.length });
 
-    if (!priceRow) return [];
-    const out = header
-      .filter((p:string) => p !== "Kalem")
+    // Fiyat satırı (Kalem/name tam eşleşme) veya satır içi anahtar
+    let priceRow = rows.find(r => {
+      const keyName = (r?.Kalem || r?.kalem || r?.name || "").toString().toLowerCase();
+      return /^(close|kapanış|kapanis|price|fiyat)$/.test(keyName);
+    }) || rows.find(r => {
+      try { return Object.keys(r).some(k => /^(close|kapanış|kapanis|price|fiyat)$/i.test(k)); }
+      catch { return false; }
+    });
+
+    if (!priceRow) {
+      console.log?.("[company] loadPrices:tableDoc:noPriceRow");
+      return [];
+    }
+
+    const periodKeys = header.length
+      ? header.filter(p => p !== "Kalem")
+      : Object.keys(priceRow).filter(k => /^\d{4}[\/\-]\d{1,2}$/.test(k));
+
+    const out = periodKeys
       .slice(-limit)
       .map((p:string) => {
         const v = toNumber(priceRow[p]);
@@ -214,49 +255,55 @@ async function loadPrices(ticker: string, limit = 240): Promise<PriceRow[]> {
       })
       .filter(Boolean) as PriceRow[];
 
-    log("loadPrices:tableDoc:parsed", { parsed: out.length });
+    console.log?.("[company] loadPrices:tableDoc:ok", { points: out.length });
     return out;
   } catch (e) {
-    log("loadPrices:tableDoc:error", e);
+    console.log?.("[company] loadPrices:tableDoc:error", e);
     return [];
   }
 }
 
 async function loadRatios(ticker: string): Promise<RatiosRow | null> {
-  log("loadRatios:start", { ticker });
+  console.log?.("[company] loadRatios:start", { ticker });
+  // hazır analytics varsa
   try {
     const d = await adminDb.collection("tickers").doc(ticker)
       .collection("analytics").doc("ratios").get();
-    log("loadRatios:prefab", { exists: d.exists });
+    console.log?.("[company] loadRatios:prefab", { exists: d.exists });
     if (d.exists) return d.data() as any;
   } catch (e) {
-    log("loadRatios:prefab:error", e);
+    console.log?.("[company] loadRatios:prefab:error", e);
   }
 
   try {
     const fin = await adminDb.collection("tickers").doc(ticker)
       .collection("sheets").doc("FIN.table").get();
-    log("loadRatios:tableDoc", { exists: fin.exists });
+    console.log?.("[company] loadRatios:tableDoc", { exists: fin.exists });
     if (!fin.exists) return null;
 
-    const data:any = fin.data();
-    const cols: string[] = (data?.header || []).slice(5);
-    const rows = Object.values({ ...data, header: undefined }) as any[];
+    const table:any = fin.data();
+    const header = getHeaderFromTableObj(table);
+    const cols: string[] = header.slice(5);
+    const rows = getRowsFromTableObj(table);
+    console.log?.("[company] loadRatios:shape", { colsLen: cols.length, rowsLen: rows.length });
 
-    const get = (code:string) =>
-      rows.find(r => (r?.kod || r?.code || r?.Kod) === code) || null;
+    const getByCode = (code:string) =>
+      rows.find(r => (r?.kod ?? r?.code ?? r?.Kod) === code) || null;
 
-    const rev = get("3C");
-    const ni  = get("3Z");
-    const eq  = get("2O");
+    const rev = getByCode("3C"); // Hasılat (çeyreklik)
+    const ni  = getByCode("3Z"); // Ana Ortaklık Net Kâr (çeyreklik)
+    const eq  = getByCode("2O"); // Ana Ortaklık Özkaynak (nokta)
 
     const last4 = cols.slice(-4);
-    const sum = (row:any) =>
-      last4.map((p)=>toNumber(row?.[p])).filter(v=>v!=null).reduce((a,b)=>a!+b!,0) || null;
+    const sum4 = (row:any) => {
+      if (!row) return null;
+      const vals = last4.map(p => toNumber(row?.[p])).filter(v => v!=null) as number[];
+      return vals.length ? vals.reduce((a,b)=>a+b, 0) : null;
+    };
 
-    const ttm_revenue = rev ? sum(rev) : null;
-    const ttm_net_income = ni ? sum(ni) : null;
-    const equity_value = eq ? toNumber(eq[cols.at(-1)!]) : null;
+    const ttm_revenue   = sum4(rev);
+    const ttm_net_income= sum4(ni);
+    const equity_value  = eq ? toNumber(eq[cols.at(-1)!]) : null;
 
     const cd = await adminDb.collection("tickers").doc(ticker).get().catch(()=>null as any);
     const c:any = cd?.exists ? cd.data() : {};
@@ -264,43 +311,43 @@ async function loadRatios(ticker: string): Promise<RatiosRow | null> {
 
     const pb  = mcap && equity_value ? mcap / equity_value : null;
     const pe  = mcap && ttm_net_income ? mcap / ttm_net_income : null;
-    const net_margin_ttm = ttm_net_income && ttm_revenue ? ttm_net_income / ttm_revenue : null;
-    const roe_ttm_simple = ttm_net_income && equity_value ? ttm_net_income / equity_value : null;
+    const net_margin_ttm = (ttm_net_income && ttm_revenue) ? ttm_net_income / ttm_revenue : null;
+    const roe_ttm_simple = (ttm_net_income && equity_value) ? ttm_net_income / equity_value : null;
 
-    const result = { mcap: mcap ?? null, equity_value: equity_value ?? null,
-      ttm_net_income, ttm_revenue, pb, pe_ttm: pe,
-      net_margin_ttm, roe_ttm_simple };
-
-    log("loadRatios:computed", result);
-    return result;
+    const out = { mcap: mcap ?? null, equity_value: equity_value ?? null,
+                  ttm_net_income, ttm_revenue, pb, pe_ttm: pe,
+                  net_margin_ttm, roe_ttm_simple };
+    console.log?.("[company] loadRatios:computed", out);
+    return out;
   } catch (e) {
-    log("loadRatios:error", e);
+    console.log?.("[company] loadRatios:error", e);
     return null;
   }
 }
 
 async function loadSeriesLast12(ticker: string): Promise<SeriesRow[]> {
-  log("loadSeriesLast12:start", { ticker });
+  console.log?.("[company] loadSeriesLast12:start", { ticker });
   try {
     const doc = await adminDb.collection("tickers").doc(ticker)
       .collection("sheets").doc("FIN.table").get();
-    log("loadSeriesLast12:doc", { exists: doc.exists });
+    console.log?.("[company] loadSeriesLast12:doc", { exists: doc.exists });
     if (!doc.exists) return [];
 
-    const data:any = doc.data();
-    const header: string[] = (data?.header || []) as string[];
-    const cols = header.slice(5);
-    const rows = Object.values({ ...data, header: undefined }) as any[];
+    const table:any = doc.data();
+    const header: string[] = getHeaderFromTableObj(table);
+    const cols = header.slice(5); // dönemler
+    const rows = getRowsFromTableObj(table);
 
     const byCode = (code:string) =>
-      rows.find(r => (r?.kod || r?.code || r?.Kod) === code) || null;
+      rows.find(r => (r?.kod ?? r?.code ?? r?.Kod) === code) || null;
 
-    const rev = byCode("3C");
-    const ni  = byCode("3Z");
-    const eq  = byCode("2O");
+    const rev = byCode("3C"); // çeyreklik
+    const ni  = byCode("3Z"); // çeyreklik
+    const eq  = byCode("2O"); // nokta
 
-    if (!cols.length || (!rev && !ni && !eq)) {
-      log("loadSeriesLast12:emptyColsOrRows", { colsLen: cols.length, hasRev: !!rev, hasNi: !!ni, hasEq: !!eq });
+    const hasRev = !!rev, hasNi = !!ni, hasEq = !!eq;
+    if (!cols.length || (!hasRev && !hasNi && !hasEq)) {
+      console.log?.("[company] loadSeriesLast12:emptyColsOrRows", { colsLen: cols.length, hasRev, hasNi, hasEq });
       return [];
     }
 
@@ -314,15 +361,14 @@ async function loadSeriesLast12(ticker: string): Promise<SeriesRow[]> {
       .sort((a,b)=> a.period.localeCompare(b.period))
       .slice(-12);
 
-    log("loadSeriesLast12:parsed", { parsed: arr.length });
+    console.log?.("[company] loadSeriesLast12:ok", { points: arr.length });
     return arr;
   } catch (e) {
-    log("loadSeriesLast12:error", e);
+    console.log?.("[company] loadSeriesLast12:error", e);
     return [];
   }
 }
 
-/* ================= KAP ================= */
 function findFirstByKeyRegex(obj: any, re: RegExp): string | null {
   const seen = new Set<any>()
   const stack = [obj]
@@ -349,7 +395,7 @@ function findFirstByKeyRegex(obj: any, re: RegExp): string | null {
 }
 
 async function loadKAP(ticker: string) {
-  log("loadKAP:start", { ticker });
+  console.log?.("[company] loadKAP:start", { ticker });
   try {
     const base = adminDb.collection('tickers').doc(ticker).collection('kap')
     const [boardSnap, ownSnap, subsSnap, votesSnap, k47Doc, rawDoc] = await Promise.all([
@@ -369,19 +415,19 @@ async function loadKAP(ticker: string) {
     const raw = (rawDoc?.exists ? (rawDoc.data() as any) : null) as RawKapPayload | null
     const auditFirm = raw ? (findFirstByKeyRegex(raw, /denetim|audit|bağımsız.?denetim|bagimsiz.?denetim/i) || null) : null
 
-    log("loadKAP:counts", {
+    console.log?.("[company] loadKAP:counts", {
       board: board.length, own: own.length, subs: subs.length, votes: votes.length,
-      hasK47: k47Doc?.exists, hasRaw: rawDoc?.exists, auditFirm
-    });
-
+      hasK47: !!k47Doc?.exists, hasRaw: !!rawDoc?.exists, auditFirm
+    })
     return { board, own, subs, votes, k47, raw, denetim_kurulusu: auditFirm }
   } catch (e) {
-    log("loadKAP:error", e);
+    console.log?.("[company] loadKAP:error", e)
     return { board:[], own:[], subs:[], votes:[], k47:{}, raw:null, denetim_kurulusu:null }
   }
 }
 
 /* ================= Mini chart helpers & UI helpers ================= */
+
 function MiniLine({ data, yKey, w = 800, h = 220 }: { data: any[]; yKey: string; w?: number; h?: number }) {
   const vals = data.map(d => Number(d?.[yKey] ?? NaN)).filter(v => !Number.isNaN(v))
   if (!data?.length || !vals.length) return <div className="text-slate-400">Veri yok</div>
@@ -397,6 +443,7 @@ function MiniLine({ data, yKey, w = 800, h = 220 }: { data: any[]; yKey: string;
     <path d={path} fill="none" stroke="currentColor" strokeWidth="2" />
   </svg>
 }
+
 function MiniBar({ data, yKey, w = 800, h = 220 }: { data: any[]; yKey: string; w?: number; h?: number }) {
   const vals = data.map(d => Number(d?.[yKey] ?? NaN)).filter(v => !Number.isNaN(v))
   if (!data?.length || !vals.length) return <div className="text-slate-400">Veri yok</div>
@@ -420,6 +467,7 @@ function MiniBar({ data, yKey, w = 800, h = 220 }: { data: any[]; yKey: string; 
     </svg>
   )
 }
+
 function MiniPriceChart({ data, w = 800, h = 220 }: { data: PriceRow[]; w?: number; h?: number }) {
   if (!data?.length) return <div className="text-slate-400">Veri yok</div>
   const pad = 12, ys = data.map(d => Number(d.close))
@@ -429,6 +477,7 @@ function MiniPriceChart({ data, w = 800, h = 220 }: { data: PriceRow[]; w?: numb
   const d = data.map((r, i) => `${i ? 'L' : 'M'} ${sx(i)} ${sy(ys[i])}`).join(' ')
   return <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`}><path d={d} fill="none" stroke="currentColor" strokeWidth="2" /></svg>
 }
+
 function Card({ title, children }: React.PropsWithChildren<{ title: string }>) {
   return <div className="rounded-2xl bg-[#0F162C] border border-[#2A355B] p-5">
     <h3 className="font-semibold">{title}</h3>
@@ -483,9 +532,10 @@ function Details({ summary, children }: React.PropsWithChildren<{ summary: strin
 }
 
 /* ================= PAGE ================= */
+
 export default async function Page({ params }: { params: PageParams }) {
   const t = (params.ticker || '').toUpperCase()
-  log("Page:start", { ticker: t });
+  console.log?.("[company] Page:start", { ticker: t })
 
   const [company, prices, ratios, series, kap, meta] = await Promise.all([
     loadCompany(t),
@@ -495,14 +545,15 @@ export default async function Page({ params }: { params: PageParams }) {
     loadKAP(t),
     loadMeta(t),
   ])
-  log("Page:data", {
+
+  console.log?.("[company] Page:data", {
     company: { last: company.last, mcap: company.mcap },
     prices: prices.length,
     ratios: !!ratios,
     series: series.length,
     kap: { board: kap.board?.length ?? 0, own: kap.own?.length ?? 0 },
-    meta: { hasName: !!meta.full_name }
-  });
+    meta: { hasName: !!(meta.full_name || company.name) }
+  })
 
   const sections = [
     { id: 'overview', title: 'Genel Bakış' },
