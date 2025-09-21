@@ -194,7 +194,7 @@ async function readLastPriceFromTable(ticker: string): Promise<number | null> {
       ? header.filter((p:string) => p !== "Kalem")
       : Object.keys(priceRow).filter(k => /^\d{4}[\/\-]\d{1,2}$/.test(k));
     for (let i = periodKeys.length - 1; i >= 0; i--) {
-      const v = toNumber(priceRow[periodKeys[i]));
+      const v = toNumber(priceRow[periodKeys[i]]); // <-- fazladan parantez düzeltildi
       if (v != null) return v;
     }
     return null;
@@ -647,7 +647,7 @@ export default async function Page({ params }: { params: PageParams }) {
     <main className="min-h-screen relative">
       <div className="absolute inset-0 bg-gradient-to-b from-[#0B0D16] to-[#131B35]" />
       <Navbar />
-      <div className="mx-auto max-w-7xl px-4 pt={[64] as any} md:pt-[72px] pb-24 relative z-20">
+      <div className="mx-auto max-w-7xl px-4 pt-[64px] md:pt-[72px] pb-24 relative z-20">
         <div className="flex items-center justify-between gap-4">
           <Link href="/companies" className="text-sm text-slate-300 hover:text-white">← Şirketler</Link>
           <div />
