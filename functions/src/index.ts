@@ -145,7 +145,9 @@ export const ingestOnce = functions.https.onRequest(async (req, res) => {
     }
 
     const files = await listSheetsInFolder(folderId);
-    const f = files.find((x) => x.name.toUpperCase() === ticker);
+   const normalize = (s:string) => s.toUpperCase().trim().replace(/\.[^/.]+$/,''); // uzantıyı at
+const f = files.find(x => normalize(x.name) === normalize(ticker));
+
     if (!f) {
       res.status(404).send("not found");
       return;
