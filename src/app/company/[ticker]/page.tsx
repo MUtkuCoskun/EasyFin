@@ -128,7 +128,10 @@ async function loadCompany(ticker: string): Promise<CompanyInfo> {
 }
 
 async function loadPrices(ticker: string, limit = 240): Promise<PriceRow[]> {
-  const snap = await adminDb
-    .collection('tickers').doc(ticker)
-    .collection('prices')
+const snap = await adminDb
+  .collection('tickers').doc(ticker)
+  .collection('prices')
+  .orderBy('ts','desc').limit(limit)
+  .get()
+  .catch(() => null as any)
 
