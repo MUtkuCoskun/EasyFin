@@ -161,7 +161,7 @@ async function loadCompany(ticker: string): Promise<CompanyInfo> {
 }
 
 async function loadPrices(ticker: string, limit = 240): Promise<PriceRow[]> {
-  // Önce alt koleksiyon varsa onu kullan
+  // A) tickers/{T}/prices alt koleksiyonu varsa onu kullan
   try {
     const snap = await adminDb.collection("tickers").doc(ticker)
       .collection("prices").orderBy("ts","desc").limit(limit).get();
@@ -181,20 +181,19 @@ async function loadPrices(ticker: string, limit = 240): Promise<PriceRow[]> {
     }
   } catch {}
 
-  // PRICES.table dokümanından oku
+  // B) PRICES.table dokümanından oku
   try {
     const doc = await adminDb.collection("tickers").doc(ticker)
       .collection("sheets").doc("PRICES.table").get();
     if (!doc.exists) return [];
     const data:any = doc.data();
     const header: string[] = data?.header || [];
-    // olası satırlar
+    // olası satırlar arasından "fiyat/price/close/kapanış" satırını yakala
     const rows = Object.values({ ...data, header: undefined }) as any[];
     const priceRow =
-      rows.find(r => Object.keys(r).some(k => /^fiyat$|^price$/i.test(k))) || null;
+      rows.find(r => Object.keys(r).some(k => /^(close|kapanış|kapanis|price|fiyat)$/i.test(k))) || null;
 
     if (!priceRow) return [];
-    const priceKey = Object.keys(priceRow).find(k => /^fiyat$|^price$/i.test(k))!;
     const out = header
       .filter((p:string) => p !== "Kalem")
       .slice(-limit)
@@ -206,8 +205,11 @@ async function loadPrices(ticker: string, limit = 240): Promise<PriceRow[]> {
       .filter(Boolean) as PriceRow[];
 
     return out;
-  } catch { return []; }
+  } catch {
+    return [];
+  }
 }
+
 
 
   // B) tickers/{T}/sheets/PRICES.table (opsiyonel)
