@@ -78,7 +78,7 @@ type MetaRow = {
   market_cap: number | null
 }
 
-/* ============= Firestore loader’ları (SSR) ============= */
+/* ============= Helpers (SSR) ============= */
 function toNumber(x: any): number | null {
   if (x == null) return null;
   if (typeof x === "number") return Number.isFinite(x) ? x : null;
@@ -93,7 +93,6 @@ function normPeriod(p: string): string {
   const m = String(p).match(/^(\d{4})[\/\-](\d{1,2})$/);
   return m ? `${m[1]}/${m[2].padStart(2,"0")}` : String(p);
 }
-
 function pickRow(rows: any[], names: string[]): any | null {
   const arr = Array.isArray(rows) ? rows : Object.values(rows || {});
   const want = names.map(s=>s.toLowerCase());
@@ -108,6 +107,7 @@ function pickRow(rows: any[], names: string[]): any | null {
   return null;
 }
 
+/* ============= Firestore loader’ları (SSR) ============= */
 async function loadMeta(ticker: string): Promise<MetaRow> {
   try {
     const base = adminDb.collection('tickers').doc(ticker)
@@ -188,7 +188,6 @@ async function loadPrices(ticker: string, limit = 240): Promise<PriceRow[]> {
     if (!doc.exists) return [];
     const data:any = doc.data();
     const header: string[] = data?.header || [];
-    // olası satırlar arasından "fiyat/price/close/kapanış" satırını yakala
     const rows = Object.values({ ...data, header: undefined }) as any[];
     const priceRow =
       rows.find(r => Object.keys(r).some(k => /^(close|kapanış|kapanis|price|fiyat)$/i.test(k))) || null;
@@ -209,29 +208,6 @@ async function loadPrices(ticker: string, limit = 240): Promise<PriceRow[]> {
     return [];
   }
 }
-
-
-
-  // B) tickers/{T}/sheets/PRICES.table (opsiyonel)
-  try {
-    const d = await adminDb.collection('tickers').doc(ticker)
-      .collection('sheets').doc('PRICES.table').get();
-    if (!d.exists) return [];
-    const obj:any = d.data();
-    const header: string[] = obj?.header || [];
-    const row = pickRow(Object.values({ ...obj, header: undefined }), [
-      'close','kapanış','kapanis','price','fiyat'
-    ]);
-    if (!row) return [];
-    const out = header.slice(-limit).map(p=>{
-      const v = toNumber(row[p]);
-      if (v==null) return null as any;
-      return { ts: normPeriod(String(p)), close: v };
-    }).filter(Boolean) as PriceRow[];
-    return out;
-  } catch { return []; }
-}
-
 
 async function loadRatios(ticker: string): Promise<RatiosRow | null> {
   // varsa hazır analytics
@@ -280,8 +256,6 @@ async function loadRatios(ticker: string): Promise<RatiosRow | null> {
   } catch { return null; }
 }
 
-
-
 async function loadSeriesLast12(ticker: string): Promise<SeriesRow[]> {
   try {
     const doc = await adminDb.collection("tickers").doc(ticker)
@@ -308,7 +282,6 @@ async function loadSeriesLast12(ticker: string): Promise<SeriesRow[]> {
       net_income_q: ni ? toNumber(ni[p]) : null,
       equity_value: eq ? toNumber(eq[p]) : null,
     }))
-      // en az bir değer olsun
       .filter(r => r.revenue_q!=null || r.net_income_q!=null || r.equity_value!=null)
       .sort((a,b)=> a.period.localeCompare(b.period))
       .slice(-12);
@@ -317,8 +290,7 @@ async function loadSeriesLast12(ticker: string): Promise<SeriesRow[]> {
   } catch { return []; }
 }
 
-
-
+/* ================= KAP ================= */
 function findFirstByKeyRegex(obj: any, re: RegExp): string | null {
   const seen = new Set<any>()
   const stack = [obj]
@@ -369,8 +341,7 @@ async function loadKAP(ticker: string) {
   }
 }
 
-/* ================= Mini chart helpers & UI helpers (değişmeden) ================= */
-
+/* ================= Mini chart helpers & UI helpers ================= */
 function MiniLine({ data, yKey, w = 800, h = 220 }: { data: any[]; yKey: string; w?: number; h?: number }) {
   const vals = data.map(d => Number(d?.[yKey] ?? NaN)).filter(v => !Number.isNaN(v))
   if (!data?.length || !vals.length) return <div className="text-slate-400">Veri yok</div>
@@ -386,7 +357,6 @@ function MiniLine({ data, yKey, w = 800, h = 220 }: { data: any[]; yKey: string;
     <path d={path} fill="none" stroke="currentColor" strokeWidth="2" />
   </svg>
 }
-
 function MiniBar({ data, yKey, w = 800, h = 220 }: { data: any[]; yKey: string; w?: number; h?: number }) {
   const vals = data.map(d => Number(d?.[yKey] ?? NaN)).filter(v => !Number.isNaN(v))
   if (!data?.length || !vals.length) return <div className="text-slate-400">Veri yok</div>
@@ -404,13 +374,12 @@ function MiniBar({ data, yKey, w = 800, h = 220 }: { data: any[]; yKey: string; 
         const rectY = v >= 0 ? y : y0
         const rectH = Math.abs(y0 - (v >= 0 ? y : yNeg))
         const fill = v >= 0 ? '#22c55e' : '#ef4444'
-        return <rect key={i} x={sx(i)} y={rectY} width={bw} height={rectH} fill={fill} rx="2" />
+        return <rect key={i} x={sx(i)} y={rectY} width={bw} height={rectH} rx="2" />
       })}
       <line x1={pad} x2={w - pad} y1={y0} y2={y0} stroke="#334155" strokeDasharray="4 4" />
     </svg>
   )
 }
-
 function MiniPriceChart({ data, w = 800, h = 220 }: { data: PriceRow[]; w?: number; h?: number }) {
   if (!data?.length) return <div className="text-slate-400">Veri yok</div>
   const pad = 12, ys = data.map(d => Number(d.close))
@@ -420,7 +389,6 @@ function MiniPriceChart({ data, w = 800, h = 220 }: { data: PriceRow[]; w?: numb
   const d = data.map((r, i) => `${i ? 'L' : 'M'} ${sx(i)} ${sy(ys[i])}`).join(' ')
   return <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`}><path d={d} fill="none" stroke="currentColor" strokeWidth="2" /></svg>
 }
-
 function Card({ title, children }: React.PropsWithChildren<{ title: string }>) {
   return <div className="rounded-2xl bg-[#0F162C] border border-[#2A355B] p-5">
     <h3 className="font-semibold">{title}</h3>
@@ -475,7 +443,6 @@ function Details({ summary, children }: React.PropsWithChildren<{ summary: strin
 }
 
 /* ================= PAGE ================= */
-
 export default async function Page({ params }: { params: PageParams }) {
   const t = (params.ticker || '').toUpperCase()
 
@@ -506,7 +473,7 @@ export default async function Page({ params }: { params: PageParams }) {
     <main className="min-h-screen relative">
       <div className="absolute inset-0 bg-gradient-to-b from-[#0B0D16] to-[#131B35]" />
       <Navbar />
-      <div className="mx-auto max-w-7xl px-4 pt-[64px] md:pt-[72px] pb-24 relative z-20">
+      <div className="mx-auto max-w-7xl px-4 pt={[64]} md:pt-[72px] pb-24 relative z-20">
         <div className="flex items-center justify-between gap-4">
           <Link href="/companies" className="text-sm text-slate-300 hover:text-white">← Şirketler</Link>
           <div />
