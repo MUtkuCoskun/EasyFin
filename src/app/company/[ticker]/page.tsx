@@ -3,7 +3,7 @@ import Link from 'next/link'
 import CompanyHeader from './CompanyHeader'
 import SidebarNav from './SidebarNav'
 import Section from './Section'
-import { adminDb } from '@/lib/firebaseAdmin'
+import { adminDb } from "../lib/firebaseAdmin";
 
 export const revalidate = 120
 export const runtime = 'nodejs'
