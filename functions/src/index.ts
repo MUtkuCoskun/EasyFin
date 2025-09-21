@@ -1,9 +1,17 @@
-import * as admin from "firebase-admin";
+// ESKİ:
+// import * as admin from "firebase-admin";
+// admin.initializeApp();
+// const db = admin.firestore();
+
+// YENİ:
+import { initializeApp } from "firebase-admin/app";
+import { getFirestore } from "firebase-admin/firestore";
 import * as functions from "firebase-functions";
 import { google } from "googleapis";
 
-admin.initializeApp();
-const db = admin.firestore();
+initializeApp();
+const db = getFirestore();
+
 
 const TZ = "Europe/Istanbul";
 const FOLDER_ID = process.env.EASYFIN_FOLDER_ID; // GitHub secret'tan gelecek
