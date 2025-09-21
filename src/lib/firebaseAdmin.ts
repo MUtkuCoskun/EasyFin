@@ -1,4 +1,4 @@
-// src/lib/firebaseAdmin.ts  (SERVER)
+// src/lib/firebaseAdmin.ts
 import { getApps, initializeApp, cert } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 
@@ -15,4 +15,5 @@ if (!app) {
     }),
   });
 }
+
 export const adminDb = getFirestore(app);
