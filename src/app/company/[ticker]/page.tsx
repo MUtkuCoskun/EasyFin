@@ -3,7 +3,7 @@ import Link from 'next/link'
 import CompanyHeader from './CompanyHeader'
 import SidebarNav from './SidebarNav'
 import Section from './Section'
-import { adminDb } from "../../../lib/firebaseAdmin";
+import { adminDb } from "../../../lib/firebaseAdmin"; // adminDb'nin doğru şekilde initialize edildiğinden emin olun!
 
 export const revalidate = 120
 export const runtime = 'nodejs'
@@ -123,7 +123,10 @@ async function loadMeta(ticker: string): Promise<MetaRow> {
       free_float: (m?.free_float ?? c?.free_float) ?? null,
       market_cap: (m?.market_cap ?? c?.market_cap) ?? null,
     }
-  } catch { return { full_name:null, description:null, free_float:null, market_cap:null } }
+  } catch (error) {
+    console.error(`[loadMeta] Error loading meta for ${ticker}:`, error);
+    return { full_name:null, description:null, free_float:null, market_cap:null }
+  }
 }
 
 async function loadCompany(ticker: string): Promise<CompanyInfo> {
@@ -155,7 +158,8 @@ async function loadCompany(ticker: string): Promise<CompanyInfo> {
       last: last ?? null,
       mcap
     }
-  } catch {
+  } catch (error) {
+    console.error(`[loadCompany] Error loading company data for ${ticker}:`, error);
     return { ticker, last:null, mcap:null }
   }
 }
@@ -179,7 +183,9 @@ async function loadPrices(ticker: string, limit = 240): Promise<PriceRow[]> {
       }).filter(Boolean) as PriceRow[];
       return rows.reverse();
     }
-  } catch {}
+  } catch (error) {
+    console.error(`[loadPrices A] Error loading prices from subcollection for ${ticker}:`, error);
+  }
 
   // B) PRICES.table dokümanından oku
   try {
@@ -204,7 +210,8 @@ async function loadPrices(ticker: string, limit = 240): Promise<PriceRow[]> {
       .filter(Boolean) as PriceRow[];
 
     return out;
-  } catch {
+  } catch (error) {
+    console.error(`[loadPrices B] Error loading prices from PRICES.table for ${ticker}:`, error);
     return [];
   }
 }
@@ -215,7 +222,9 @@ async function loadRatios(ticker: string): Promise<RatiosRow | null> {
     const d = await adminDb.collection("tickers").doc(ticker)
       .collection("analytics").doc("ratios").get();
     if (d.exists) return d.data() as any;
-  } catch {}
+  } catch (error) {
+    console.error(`[loadRatios A] Error loading ratios from analytics subcollection for ${ticker}:`, error);
+  }
 
   try {
     const fin = await adminDb.collection("tickers").doc(ticker)
@@ -241,7 +250,10 @@ async function loadRatios(ticker: string): Promise<RatiosRow | null> {
     const ttm_net_income = ni ? sum(ni) : null;
     const equity_value = eq ? toNumber(eq[cols.at(-1)!]) : null;
 
-    const cd = await adminDb.collection("tickers").doc(ticker).get().catch(()=>null as any);
+    const cd = await adminDb.collection("tickers").doc(ticker).get().catch((error)=>{
+      console.error(`[loadRatios B] Error loading ticker doc for mcap calculation for ${ticker}:`, error);
+      return null as any;
+    });
     const c:any = cd?.exists ? cd.data() : {};
     const mcap = c?.mcap ?? null;
 
@@ -253,7 +265,10 @@ async function loadRatios(ticker: string): Promise<RatiosRow | null> {
     return { mcap: mcap ?? null, equity_value: equity_value ?? null,
              ttm_net_income, ttm_revenue, pb, pe_ttm: pe,
              net_margin_ttm, roe_ttm_simple };
-  } catch { return null; }
+  } catch (error) {
+    console.error(`[loadRatios B] Error loading ratios from FIN.table for ${ticker}:`, error);
+    return null;
+  }
 }
 
 async function loadSeriesLast12(ticker: string): Promise<SeriesRow[]> {
@@ -287,7 +302,10 @@ async function loadSeriesLast12(ticker: string): Promise<SeriesRow[]> {
       .slice(-12);
 
     return arr;
-  } catch { return []; }
+  } catch (error) {
+    console.error(`[loadSeriesLast12] Error loading series data for ${ticker}:`, error);
+    return [];
+  }
 }
 
 /* ================= KAP ================= */
@@ -308,13 +326,16 @@ function findFirstByKeyRegex(obj: any, re: RegExp): string | null {
             if (inner) return inner
           }
         }
-        if (typeof v === 'string' && re.test(v) && v.trim()) return v.trim()
-        if (v && typeof v === 'object') stack.push(v)
-      } catch {}
+        if (v && typeof v === 'object') stack.push(v) // Sadece obje ise ekle, string ise direk kontrol ettik
+      } catch (e) {
+        // Obje içinde regex kontrolünde hata olursa diye (nadiren)
+        console.warn(`[findFirstByKeyRegex] Error processing key ${k}:`, e);
+      }
     }
   }
   return null
 }
+
 
 async function loadKAP(ticker: string) {
   try {
@@ -336,7 +357,8 @@ async function loadKAP(ticker: string) {
     const raw = (rawDoc?.exists ? (rawDoc.data() as any) : null) as RawKapPayload | null
     const auditFirm = raw ? (findFirstByKeyRegex(raw, /denetim|audit|bağımsız.?denetim|bagimsiz.?denetim/i) || null) : null
     return { board, own, subs, votes, k47, raw, denetim_kurulusu: auditFirm }
-  } catch {
+  } catch (error) {
+    console.error(`[loadKAP] Error loading KAP data for ${ticker}:`, error);
     return { board:[], own:[], subs:[], votes:[], k47:{}, raw:null, denetim_kurulusu:null }
   }
 }
