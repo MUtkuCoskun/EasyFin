@@ -1,6 +1,6 @@
 // src/app/company/[ticker]/page.tsx
 import "server-only";
-import { headers } from "next/headers";
+import { headers, cookies } from "next/headers";
 import type { Metadata } from "next";
 
 export const dynamic = "force-dynamic"; // her istekte taze çek
@@ -18,13 +18,7 @@ type SheetTable = {
   rows: any[];
 };
 
-// ---- Helpers ----
-
-// Sağlam base URL çözümü:
-// 1) NEXT_PUBLIC_BASE_URL (ör. https://easy-fin-...vercel.app)
-// 2) VERCEL_URL (ör. easy-fin-...vercel.app) + https
-// 3) x-forwarded-host/proto header’ları
-// 4) localhost:3000
+// ---------- BASE URL ----------
 function getBaseUrl(): string {
   const envBase = process.env.NEXT_PUBLIC_BASE_URL?.trim();
   if (envBase) return envBase.replace(/\/+$/, "");
@@ -35,12 +29,10 @@ function getBaseUrl(): string {
   try {
     const h = headers();
     const host = h.get("x-forwarded-host") || h.get("host");
-    const proto =
-      h.get("x-forwarded-proto") ||
-      (host && host.startsWith("localhost") ? "http" : "https");
+    const proto = h.get("x-forwarded-proto") || (host?.startsWith("localhost") ? "http" : "https");
     if (host) return `${proto}://${host}`.replace(/\/+$/, "");
   } catch {
-    // headers() bazı ortamlarda kullanılamazsa sessiz geç
+    // headers() bazı ortamlarda erişilemeyebilir
   }
 
   return "http://localhost:3000";
@@ -48,12 +40,38 @@ function getBaseUrl(): string {
 
 function buildApiUrl(path: string): string {
   const rel = `/api/debug/firestore?path=${encodeURIComponent(path)}`;
-  // Mutlaka absolute yap: Node fetch relative kabul etmiyor
+  // Absolute şart (Node fetch relative URL'i kabul etmiyor)
   return new URL(rel, getBaseUrl()).toString();
 }
 
+// ---------- AUTH FORWARD ----------
+function buildAuthHeaders(): HeadersInit {
+  const h = headers();
+  const c = cookies();
+
+  const out: Record<string, string> = {};
+
+  // Preview/Prod koruması genelde cookie ile doğrular
+  const cookieStr = c.toString();
+  if (cookieStr) out["cookie"] = cookieStr;
+
+  // Basic auth vb. varsa
+  const auth = h.get("authorization");
+  if (auth) out["authorization"] = auth;
+
+  // Vercel Preview Protection bypass header
+  const bypassHeader = h.get("x-vercel-protection-bypass") || process.env.VERCEL_PROTECTION_BYPASS;
+  if (bypassHeader) out["x-vercel-protection-bypass"] = bypassHeader;
+
+  // (opsiyonel) iç işaret
+  out["x-internal-ssr"] = "1";
+
+  return out;
+}
+
+// ---------- API FETCH ----------
 async function getSheetDoc<T = any>(path: string): Promise<T | null> {
-  // Doküman/koleksiyon guard (doküman = çift segment)
+  // Doküman/koleksiyon guard: doküman = çift segment
   const segs = path.split("/").filter(Boolean);
   if (segs.length % 2 !== 0) {
     console.error("[getSheetDoc] Koleksiyon path (doküman bekleniyordu):", path);
@@ -63,7 +81,10 @@ async function getSheetDoc<T = any>(path: string): Promise<T | null> {
   const url = buildApiUrl(path);
 
   try {
-    const res = await fetch(url, { cache: "no-store" });
+    const res = await fetch(url, {
+      cache: "no-store",
+      headers: buildAuthHeaders(),
+    });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       console.error("[getSheetDoc] !res.ok", res.status, url, text?.slice(0, 400));
@@ -81,12 +102,14 @@ async function getSheetDoc<T = any>(path: string): Promise<T | null> {
   }
 }
 
+// ---------- helpers ----------
 function toNum(x: any): number | null {
   if (x == null) return null;
   if (typeof x === "number") return isFinite(x) ? x : null;
   if (typeof x !== "string") return null;
   const s = x.trim();
   if (!s) return null;
+  // TR formatı: "1.234.567,89" → "1234567.89"
   const norm = s.replace(/\./g, "").replace(/,/g, ".");
   const n = Number(norm);
   return isFinite(n) ? n : null;
@@ -106,6 +129,7 @@ function fmtMoney(n: number | null | undefined) {
 }
 
 function pickPeriods(fin: SheetTable): string[] {
+  // FIN.table: ilk 5 kolon meta, sonra dönem kolonları (yeni ⇒ eski)
   const h = fin.header ?? [];
   return h.slice(5);
 }
@@ -149,22 +173,25 @@ function quarterSeries(
   return out;
 }
 
-// ---- Page ----
+// ---------- Page ----------
 export async function generateMetadata({
   params,
 }: {
   params: { ticker: string };
 }): Promise<Metadata> {
   const ticker = params.ticker?.toUpperCase?.() || "TICKER";
-  return { title: `${ticker} • Finansal Analiz` };
+  return {
+    title: `${ticker} • Finansal Analiz`,
+  };
 }
 
 export default async function CompanyPage({ params }: { params: { ticker: string } }) {
   const ticker = (params?.ticker || "").toUpperCase();
 
+  // Firestore'dan 5 tabloyu çek
   const [fin, tidy, kap, prices, dash] = await Promise.all([
     getSheetDoc<SheetTable>(`tickers/${ticker}/sheets/FIN.table`),
-    getSheetDoc<SheetTable>(`tickers/${ticker}/sheets/FIN.tidy`),
+    getSheetDoc<SheetTable>(`tickers/${ticker}/sheets/FIN.tidy`), // ileride grafik/filtre için hazır
     getSheetDoc<SheetTable>(`tickers/${ticker}/sheets/KAP.table`),
     getSheetDoc<SheetTable>(`tickers/${ticker}/sheets/PRICES.table`),
     getSheetDoc<SheetTable>(`tickers/${ticker}/sheets/DASH.table`),
@@ -195,9 +222,9 @@ export default async function CompanyPage({ params }: { params: { ticker: string
   // Temel kalemler
   const netSales = codes["3C"];
   const grossProfit = codes["3D"];
-  const mktExp = codes["3DA"];
-  const adminExp = codes["3DB"];
-  const rndExp = codes["3DC"];
+  const mktExp = codes["3DA"]; // negatif
+  const adminExp = codes["3DB"]; // negatif
+  const rndExp = codes["3DC"]; // çoğu şirkette 0
   const depAmort = codes["4B"];
   const opProfit = codes["3DF"];
   const parentNI = codes["3Z"];
@@ -208,7 +235,7 @@ export default async function CompanyPage({ params }: { params: { ticker: string
   const ltDebt = codes["2BA"];
   const parentEquity = codes["2O"];
 
-  // TTM
+  // TTM hesapları (son 4 çeyrek)
   const ttmSales = sumLastN(netSales, periods, 4);
   const ttmGross = sumLastN(grossProfit, periods, 4);
   const ttmDep = sumLastN(depAmort, periods, 4);
@@ -216,6 +243,7 @@ export default async function CompanyPage({ params }: { params: { ticker: string
   const ttmAdm = sumLastN(adminExp, periods, 4);
   const ttmRND = sumLastN(rndExp, periods, 4) ?? 0;
 
+  // EBITDA ≈ Brüt Kar + Paz. + GY + AR-GE + Amortisman (giderler negatif geldiği için topluyoruz)
   const ttmEBITDA =
     ttmGross != null && ttmMkt != null && ttmAdm != null && ttmDep != null
       ? ttmGross + ttmMkt + ttmAdm + ttmRND + ttmDep
@@ -223,7 +251,7 @@ export default async function CompanyPage({ params }: { params: { ticker: string
 
   const ttmNI = sumLastN(parentNI, periods, 4);
 
-  // Son bilanço
+  // Son bilanço değerleri (en yeni dönem)
   const lastCash = latestNonEmpty(cash, periods);
   const lastStDebt = latestNonEmpty(stDebt, periods);
   const lastLtDebt = latestNonEmpty(ltDebt, periods);
@@ -238,7 +266,7 @@ export default async function CompanyPage({ params }: { params: { ticker: string
   const evEbitda = lastMcap != null && ttmEBITDA ? (lastMcap + (netDebt ?? 0)) / ttmEBITDA : null;
   const ndEbitda = ttmEBITDA ? (netDebt ?? 0) / ttmEBITDA : null;
 
-  // Seriler (son 8 çeyrek)
+  // Grafik/seri için birkaç kalem (son 8 çeyrek)
   const take = 8;
   const qSales = quarterSeries((k) => toNum(netSales?.[k]) ?? null, periods, take);
   const qNI = quarterSeries((k) => toNum(parentNI?.[k]) ?? null, periods, take);
@@ -252,7 +280,7 @@ export default async function CompanyPage({ params }: { params: { ticker: string
     return (gp ?? 0) + (mk ?? 0) + (ad ?? 0) + rd + (dp ?? 0);
   }, periods, take);
 
-  // KAP (flatten: header ["field","value"])
+  // KAP (flatten tablo: header ["field","value"])
   const kapRows: Array<{ field: string; value: string }> = Array.isArray(kap?.rows)
     ? kap!.rows.map((r: any) => ({
         field: String(r?.field ?? r?.Field ?? r?.key ?? ""),
@@ -275,7 +303,9 @@ export default async function CompanyPage({ params }: { params: { ticker: string
         <h1 className="text-2xl md:text-3xl font-semibold tracking-tight">
           {ticker} • Finansal Analiz
         </h1>
-        <p className="text-sm text-gray-500">Kaynaklar: FIN, PRICES, KAP, DASH (Firestore)</p>
+        <p className="text-sm text-gray-500">
+          Kaynaklar: FIN, PRICES, KAP, DASH (Firestore)
+        </p>
       </section>
 
       {/* Price & KPI Cards */}
