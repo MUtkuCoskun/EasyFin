@@ -1,6 +1,5 @@
 // src/app/company/[ticker]/page.tsx
 import "server-only";
-import { headers } from "next/headers";
 import type { Metadata } from "next";
 
 export const dynamic = "force-dynamic"; // her istekte taze çek
@@ -19,25 +18,42 @@ type SheetTable = {
 };
 
 // ---- Helpers ----
-function getBaseUrl() {
-  // SSR içinde kendi origin'ini bul
-  const h = headers();
-  const host = h.get("x-forwarded-host") || h.get("host") || "localhost:3000";
-  const proto = h.get("x-forwarded-proto") || (host.startsWith("localhost") ? "http" : "https");
-  return `${proto}://${host}`;
+
+// API URL'yi güvenli kur: default relative, opsiyonel NEXT_PUBLIC_BASE_URL override
+function buildApiUrl(path: string) {
+  const rel = `/api/debug/firestore?path=${encodeURIComponent(path)}`;
+  const base = process.env.NEXT_PUBLIC_BASE_URL?.trim();
+  return base ? `${base}${rel}` : rel;
 }
 
 async function getSheetDoc<T = any>(path: string): Promise<T | null> {
-  const base = getBaseUrl();
-  const url = `${base}/api/debug/firestore?path=${encodeURIComponent(path)}`;
-  const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) return null;
-  const json = (await res.json()) as FirestoreDoc<T>;
-  if (!json?.ok) return null;
-  // doc modunda /api debug zaten {ok, data} döndürüyor
-  // bazı eski versiyonlarda {ok, data} yerine {ok, exists, data} olabilir; hepsini tolere et
-  // @ts-ignore
-  return json.data ?? null;
+  // Doküman / koleksiyon guard: doküman = çift segment sayısı
+  const segs = path.split("/").filter(Boolean);
+  if (segs.length % 2 !== 0) {
+    console.error("[getSheetDoc] Koleksiyon path verilmiş (doküman bekleniyordu):", path);
+    return null;
+  }
+
+  const url = buildApiUrl(path);
+
+  try {
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      console.error("[getSheetDoc] !res.ok", res.status, url, text?.slice(0, 400));
+      return null;
+    }
+    const json = (await res.json()) as FirestoreDoc<T> & { exists?: boolean };
+    if (!json?.ok) {
+      console.error("[getSheetDoc] json.ok=false", url, json);
+      return null;
+    }
+    // /api/debug/firestore dokümanda { ok, data } döndürür
+    return json.data ?? null;
+  } catch (e) {
+    console.error("[getSheetDoc] fetch error", url, e);
+    return null;
+  }
 }
 
 function toNum(x: any): number | null {
@@ -46,7 +62,7 @@ function toNum(x: any): number | null {
   if (typeof x !== "string") return null;
   const s = x.trim();
   if (!s) return null;
-  // TR formatı "15,59" vs. ve binlik noktaları: "1.234.567,89"
+  // TR formatı "15,59", binlik "1.234.567,89"
   const norm = s.replace(/\./g, "").replace(/,/g, ".");
   const n = Number(norm);
   return isFinite(n) ? n : null;
@@ -59,7 +75,6 @@ function fmt(n: number | null | undefined, opt: Intl.NumberFormatOptions = {}) {
 
 function fmtMoney(n: number | null | undefined) {
   if (n == null || !isFinite(n)) return "–";
-  // compact kısa yazım (B, T vs)
   return new Intl.NumberFormat("tr-TR", {
     notation: "compact",
     maximumFractionDigits: 2,
@@ -99,7 +114,11 @@ function sumLastN(row: any, periodKeys: string[], n: number): number | null {
   return vals.slice(0, n).reduce((a, b) => a + b, 0);
 }
 
-function quarterSeries(formula: (k: string) => number | null, periodKeys: string[], take: number) {
+function quarterSeries(
+  formula: (k: string) => number | null,
+  periodKeys: string[],
+  take: number
+) {
   const out: { period: string; value: number | null }[] = [];
   for (let i = 0; i < Math.min(take, periodKeys.length); i++) {
     out.push({ period: periodKeys[i], value: formula(periodKeys[i]) });
@@ -125,7 +144,7 @@ export default async function CompanyPage({ params }: { params: { ticker: string
   // Firestore'dan 5 tabloyu çek
   const [fin, tidy, kap, prices, dash] = await Promise.all([
     getSheetDoc<SheetTable>(`tickers/${ticker}/sheets/FIN.table`),
-    getSheetDoc<SheetTable>(`tickers/${ticker}/sheets/FIN.tidy`), // şu an kullanmasan da ileride grafik/filtre için hazır
+    getSheetDoc<SheetTable>(`tickers/${ticker}/sheets/FIN.tidy`), // ileride grafik/filtre için hazır
     getSheetDoc<SheetTable>(`tickers/${ticker}/sheets/KAP.table`),
     getSheetDoc<SheetTable>(`tickers/${ticker}/sheets/PRICES.table`),
     getSheetDoc<SheetTable>(`tickers/${ticker}/sheets/DASH.table`),
@@ -138,6 +157,9 @@ export default async function CompanyPage({ params }: { params: { ticker: string
         <p className="mt-4 text-red-600">
           FIN.table bulunamadı. Firestore path: <code>tickers/{ticker}/sheets/FIN.table</code>
         </p>
+        <div className="mt-2 text-sm text-gray-500">
+          API: <code>/api/debug/firestore?path=tickers%2F{ticker}%2Fsheets%2FFIN.table</code>
+        </div>
       </main>
     );
   }
@@ -188,29 +210,26 @@ export default async function CompanyPage({ params }: { params: { ticker: string
   const lastLtDebt = latestNonEmpty(ltDebt, periods);
   const lastEquity = latestNonEmpty(parentEquity, periods);
 
-  const netDebt =
-    (lastStDebt ?? 0) + (lastLtDebt ?? 0) - (lastCash ?? 0);
+  const netDebt = (lastStDebt ?? 0) + (lastLtDebt ?? 0) - (lastCash ?? 0);
 
   // Oranlar
   const pe = lastMcap != null && ttmNI ? lastMcap / ttmNI : null;
   const ps = lastMcap != null && ttmSales ? lastMcap / ttmSales : null;
   const pb = lastMcap != null && lastEquity ? lastMcap / lastEquity : null;
-  const evEbitda = lastMcap != null && ttmEBITDA
-    ? (lastMcap + (netDebt ?? 0)) / ttmEBITDA
-    : null;
+  const evEbitda = lastMcap != null && ttmEBITDA ? (lastMcap + (netDebt ?? 0)) / ttmEBITDA : null;
   const ndEbitda = ttmEBITDA ? (netDebt ?? 0) / ttmEBITDA : null;
 
   // Grafik/seri için birkaç kalem (son 8 çeyrek)
   const take = 8;
-  const qSales = quarterSeries(k => toNum(netSales?.[k]) ?? null, periods, take);
-  const qNI = quarterSeries(k => toNum(parentNI?.[k]) ?? null, periods, take);
-  const qEBITDA = quarterSeries(k => {
+  const qSales = quarterSeries((k) => toNum(netSales?.[k]) ?? null, periods, take);
+  const qNI = quarterSeries((k) => toNum(parentNI?.[k]) ?? null, periods, take);
+  const qEBITDA = quarterSeries((k) => {
     const gp = toNum(grossProfit?.[k]);
     const mk = toNum(mktExp?.[k]);
     const ad = toNum(adminExp?.[k]);
     const rd = toNum(rndExp?.[k]) ?? 0;
     const dp = toNum(depAmort?.[k]);
-    if ([gp, mk, ad, dp].some(v => v == null)) return null;
+    if ([gp, mk, ad, dp].some((v) => v == null)) return null;
     return (gp ?? 0) + (mk ?? 0) + (ad ?? 0) + rd + (dp ?? 0);
   }, periods, take);
 
@@ -223,9 +242,10 @@ export default async function CompanyPage({ params }: { params: { ticker: string
     : [];
 
   const kapQuick = kapRows
-    .filter(r =>
-      /audit|denet|board|kurul|sermaye|pay|oy|ortak/i.test(r.field) ||
-      /bağımsız denet|yeminli mali müşavir/i.test(r.value)
+    .filter(
+      (r) =>
+        /audit|denet|board|kurul|sermaye|pay|oy|ortak/i.test(r.field) ||
+        /bağımsız denet|yeminli mali müşavir/i.test(r.value)
     )
     .slice(0, 12);
 
@@ -236,16 +256,17 @@ export default async function CompanyPage({ params }: { params: { ticker: string
         <h1 className="text-2xl md:text-3xl font-semibold tracking-tight">
           {ticker} • Finansal Analiz
         </h1>
-        <p className="text-sm text-gray-500">
-          Kaynaklar: FIN, PRICES, KAP, DASH (Firestore)
-        </p>
+        <p className="text-sm text-gray-500">Kaynaklar: FIN, PRICES, KAP, DASH (Firestore)</p>
       </section>
 
       {/* Price & KPI Cards */}
       <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         <Card title="Fiyat">
           <div className="text-2xl font-semibold">
-            {lastPrice == null ? "–" : fmt(lastPrice, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
+            {lastPrice == null
+              ? "–"
+              : fmt(lastPrice, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{" "}
+            ₺
           </div>
           <div className="text-xs text-gray-500 mt-1">Anlık</div>
         </Card>
@@ -321,11 +342,46 @@ export default async function CompanyPage({ params }: { params: { ticker: string
       <section className="space-y-2">
         <h2 className="text-lg font-semibold">Ham Dokümanlar</h2>
         <ul className="list-disc ml-5 text-sm text-blue-700">
-          <li><a className="underline" href={`/api/debug/firestore?path=${encodeURIComponent(`tickers/${ticker}/sheets/FIN.table`)}`}>FIN.table</a></li>
-          <li><a className="underline" href={`/api/debug/firestore?path=${encodeURIComponent(`tickers/${ticker}/sheets/FIN.tidy`)}`}>FIN.tidy</a></li>
-          <li><a className="underline" href={`/api/debug/firestore?path=${encodeURIComponent(`tickers/${ticker}/sheets/KAP.table`)}`}>KAP.table</a></li>
-          <li><a className="underline" href={`/api/debug/firestore?path=${encodeURIComponent(`tickers/${ticker}/sheets/PRICES.table`)}`}>PRICES.table</a></li>
-          <li><a className="underline" href={`/api/debug/firestore?path=${encodeURIComponent(`tickers/${ticker}/sheets/DASH.table`)}`}>DASH.table</a></li>
+          <li>
+            <a
+              className="underline"
+              href={`/api/debug/firestore?path=${encodeURIComponent(`tickers/${ticker}/sheets/FIN.table`)}`}
+            >
+              FIN.table
+            </a>
+          </li>
+          <li>
+            <a
+              className="underline"
+              href={`/api/debug/firestore?path=${encodeURIComponent(`tickers/${ticker}/sheets/FIN.tidy`)}`}
+            >
+              FIN.tidy
+            </a>
+          </li>
+          <li>
+            <a
+              className="underline"
+              href={`/api/debug/firestore?path=${encodeURIComponent(`tickers/${ticker}/sheets/KAP.table`)}`}
+            >
+              KAP.table
+            </a>
+          </li>
+          <li>
+            <a
+              className="underline"
+              href={`/api/debug/firestore?path=${encodeURIComponent(`tickers/${ticker}/sheets/PRICES.table`)}`}
+            >
+              PRICES.table
+            </a>
+          </li>
+          <li>
+            <a
+              className="underline"
+              href={`/api/debug/firestore?path=${encodeURIComponent(`tickers/${ticker}/sheets/DASH.table`)}`}
+            >
+              DASH.table
+            </a>
+          </li>
         </ul>
       </section>
     </main>
@@ -369,7 +425,9 @@ function MiniSeries({
           <thead>
             <tr className="text-left text-gray-500">
               {head.map((h) => (
-                <th key={h} className="py-1 pr-2">{h}</th>
+                <th key={h} className="py-1 pr-2">
+                  {h}
+                </th>
               ))}
             </tr>
           </thead>
