@@ -2,6 +2,8 @@
 import "server-only";
 import { headers, cookies } from "next/headers";
 import type { Metadata } from "next";
+import { FiTrendingUp, FiBarChart2, FiActivity, FiDollarSign, FiFileText, FiLink } from "react-icons/fi";
+
 
 export const dynamic = "force-dynamic"; // her istekte taze çek
 
@@ -181,7 +183,7 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const ticker = params.ticker?.toUpperCase?.() || "TICKER";
   return {
-    title: `${ticker} • Finansal Analiz`,
+    title: `${ticker} • EasyFin • Fütüristik Finansal Analiz`,
   };
 }
 
@@ -199,43 +201,41 @@ export default async function CompanyPage({ params }: { params: { ticker: string
 
   if (!fin) {
     return (
-      <main className="mx-auto max-w-6xl p-6">
-        <h1 className="text-2xl font-semibold">[{ticker}]</h1>
-        <p className="mt-4 text-red-600">
-          FIN.table bulunamadı. Firestore path: <code>tickers/{ticker}/sheets/FIN.table</code>
-        </p>
-        <div className="mt-2 text-sm text-gray-500">
-          API: <code>{buildApiUrl(`tickers/${ticker}/sheets/FIN.table`)}</code>
+      <main className="bg-gray-900 text-white min-h-screen flex items-center justify-center">
+        <div className="text-center p-8 bg-gray-800 rounded-2xl shadow-xl">
+          <h1 className="text-3xl font-bold text-red-500">Hata</h1>
+          <p className="mt-4 text-gray-300">
+            <code className="bg-gray-700 p-1 rounded">[{ticker}]</code> için FIN.table verisi bulunamadı.
+          </p>
+          <p className="mt-2 text-xs text-gray-500">
+            İstenen Firestore path: <code>tickers/{ticker}/sheets/FIN.table</code>
+          </p>
         </div>
       </main>
     );
   }
 
-  const periods = pickPeriods(fin); // yeni → eski
+  // === DATA PROCESSING (UNCHANGED) ===
+  const periods = pickPeriods(fin);
   const codes = rowByCode(fin);
 
-  // PRICES
   const pRow = prices?.rows?.[0] || {};
   const lastPrice = toNum(pRow?.["fiyat"]);
   const lastMcap = toNum(pRow?.["piyasa_değeri"]) ?? toNum(pRow?.["piyasa_deÄŸeri"]);
 
-  // Temel kalemler
   const netSales = codes["3C"];
   const grossProfit = codes["3D"];
-  const mktExp = codes["3DA"]; // negatif
-  const adminExp = codes["3DB"]; // negatif
-  const rndExp = codes["3DC"]; // çoğu şirkette 0
+  const mktExp = codes["3DA"];
+  const adminExp = codes["3DB"];
+  const rndExp = codes["3DC"];
   const depAmort = codes["4B"];
   const opProfit = codes["3DF"];
   const parentNI = codes["3Z"];
-
-  // Bilanço kalemleri
   const cash = codes["1AA"];
   const stDebt = codes["2AA"];
   const ltDebt = codes["2BA"];
   const parentEquity = codes["2O"];
 
-  // TTM hesapları (son 4 çeyrek)
   const ttmSales = sumLastN(netSales, periods, 4);
   const ttmGross = sumLastN(grossProfit, periods, 4);
   const ttmDep = sumLastN(depAmort, periods, 4);
@@ -243,15 +243,12 @@ export default async function CompanyPage({ params }: { params: { ticker: string
   const ttmAdm = sumLastN(adminExp, periods, 4);
   const ttmRND = sumLastN(rndExp, periods, 4) ?? 0;
 
-  // EBITDA ≈ Brüt Kar + Paz. + GY + AR-GE + Amortisman (giderler negatif geldiği için topluyoruz)
   const ttmEBITDA =
     ttmGross != null && ttmMkt != null && ttmAdm != null && ttmDep != null
       ? ttmGross + ttmMkt + ttmAdm + ttmRND + ttmDep
       : null;
-
   const ttmNI = sumLastN(parentNI, periods, 4);
 
-  // Son bilanço değerleri (en yeni dönem)
   const lastCash = latestNonEmpty(cash, periods);
   const lastStDebt = latestNonEmpty(stDebt, periods);
   const lastLtDebt = latestNonEmpty(ltDebt, periods);
@@ -259,14 +256,12 @@ export default async function CompanyPage({ params }: { params: { ticker: string
 
   const netDebt = (lastStDebt ?? 0) + (lastLtDebt ?? 0) - (lastCash ?? 0);
 
-  // Oranlar
   const pe = lastMcap != null && ttmNI ? lastMcap / ttmNI : null;
   const ps = lastMcap != null && ttmSales ? lastMcap / ttmSales : null;
   const pb = lastMcap != null && lastEquity ? lastMcap / lastEquity : null;
   const evEbitda = lastMcap != null && ttmEBITDA ? (lastMcap + (netDebt ?? 0)) / ttmEBITDA : null;
   const ndEbitda = ttmEBITDA ? (netDebt ?? 0) / ttmEBITDA : null;
 
-  // Grafik/seri için birkaç kalem (son 8 çeyrek)
   const take = 8;
   const qSales = quarterSeries((k) => toNum(netSales?.[k]) ?? null, periods, take);
   const qNI = quarterSeries((k) => toNum(parentNI?.[k]) ?? null, periods, take);
@@ -280,179 +275,184 @@ export default async function CompanyPage({ params }: { params: { ticker: string
     return (gp ?? 0) + (mk ?? 0) + (ad ?? 0) + rd + (dp ?? 0);
   }, periods, take);
 
-  // KAP (flatten tablo: header ["field","value"])
   const kapRows: Array<{ field: string; value: string }> = Array.isArray(kap?.rows)
     ? kap!.rows.map((r: any) => ({
-        field: String(r?.field ?? r?.Field ?? r?.key ?? ""),
-        value: String(r?.value ?? r?.Value ?? r?.val ?? ""),
+        field: String(r?.field ?? ""),
+        value: String(r?.value ?? ""),
       }))
     : [];
+  
+  const companyName = kapRows.find(r => r.field.toLowerCase().includes('şirketin ticaret ünvanı'))?.value || `${ticker} A.Ş.`;
 
-  const kapQuick = kapRows
-    .filter(
-      (r) =>
-        /audit|denet|board|kurul|sermaye|pay|oy|ortak/i.test(r.field) ||
-        /bağımsız denet|yeminli mali müşavir/i.test(r.value)
-    )
-    .slice(0, 12);
 
+  // === NEW FUTURISTIC UI ===
   return (
-    <main className="mx-auto max-w-7xl p-6 space-y-8">
-      {/* Header */}
-      <section className="flex flex-col gap-2">
-        <h1 className="text-2xl md:text-3xl font-semibold tracking-tight">
-          {ticker} • Finansal Analiz
-        </h1>
-        <p className="text-sm text-gray-500">
-          Kaynaklar: FIN, PRICES, KAP, DASH (Firestore)
-        </p>
-      </section>
+    <div className="bg-gray-900 text-gray-200 min-h-screen font-sans">
+      <main className="mx-auto max-w-7xl p-4 sm:p-6 lg:p-8">
+        {/* Header */}
+        <header className="mb-8">
+          <h1 className="text-4xl md:text-5xl font-bold text-white tracking-tighter">{companyName} ({ticker})</h1>
+          <p className="text-lg text-cyan-400">Kapsamlı Temel Analiz Raporu</p>
+        </header>
 
-      {/* Price & KPI Cards */}
-      <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-        <Card title="Fiyat">
-          <div className="text-2xl font-semibold">
-            {lastPrice == null
-              ? "–"
-              : fmt(lastPrice, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{" "}
-            ₺
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Main Column */}
+          <div className="lg:col-span-2 space-y-8">
+            {/* Key Metrics Section */}
+            <Section title="Anlık Değerler" icon={<FiActivity />}>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                <MetricCard title="Son Fiyat" value={`${fmt(lastPrice, { minimumFractionDigits: 2 })} ₺`} />
+                <MetricCard title="Piyasa Değeri" value={fmtMoney(lastMcap) + " ₺"} />
+                <MetricCard title="Net Borç" value={fmtMoney(netDebt ?? null) + " ₺"} note="Son Bilanço" />
+                <MetricCard title="TTM Satışlar" value={fmtMoney(ttmSales) + " ₺"} note="Son 12 Ay" />
+                <MetricCard title="TTM FAVÖK" value={fmtMoney(ttmEBITDA) + " ₺"} note="Son 12 Ay" />
+                <MetricCard title="TTM Net Kar" value={fmtMoney(ttmNI) + " ₺"} note="Son 12 Ay" />
+              </div>
+            </Section>
+
+            {/* Valuation Section */}
+            <Section title="Değerleme Çarpanları" icon={<FiDollarSign />}>
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+                  <RatioCard title="F/K" value={pe} />
+                  <RatioCard title="PD/DD" value={pb} />
+                  <RatioCard title="FD/Satış" value={ps} />
+                  <RatioCard title="FD/FAVÖK" value={evEbitda} />
+                  <RatioCard title="Net Borç/FAVÖK" value={ndEbitda} />
+              </div>
+            </Section>
+
+            {/* Quarterly Series */}
+             <Section title="Çeyreklik Performans" icon={<FiBarChart2 />}>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <MiniSeriesTable title="Satışlar" series={qSales} />
+                    <MiniSeriesTable title="FAVÖK" series={qEBITDA} />
+                    <MiniSeriesTable title="Net Kar" series={qNI} />
+                </div>
+            </Section>
           </div>
-          <div className="text-xs text-gray-500 mt-1">Anlık</div>
-        </Card>
-        <Card title="Piyasa Değeri">
-          <div className="text-2xl font-semibold">{fmtMoney(lastMcap)}</div>
-          <div className="text-xs text-gray-500 mt-1">₺</div>
-        </Card>
-        <Card title="Net Borç">
-          <div className="text-2xl font-semibold">{fmtMoney(netDebt ?? null)}</div>
-          <div className="text-xs text-gray-500 mt-1">Son bilanço</div>
-        </Card>
-        <Card title="TTM Satış">
-          <div className="text-2xl font-semibold">{fmtMoney(ttmSales)}</div>
-          <div className="text-xs text-gray-500 mt-1">Son 4 çeyrek</div>
-        </Card>
-        <Card title="TTM FAVÖK">
-          <div className="text-2xl font-semibold">{fmtMoney(ttmEBITDA)}</div>
-          <div className="text-xs text-gray-500 mt-1">Son 4 çeyrek</div>
-        </Card>
-      </section>
+          
+          {/* Right Sidebar */}
+          <aside className="space-y-8">
+              {/* Financial Health Snapshot */}
+              <Section title="Finansal Sağlık" icon={<FiTrendingUp />}>
+                  <HealthBar 
+                      title="Kısa Vade Varlıklar" 
+                      value={latestNonEmpty(codes["1A"], periods)} 
+                      total={latestNonEmpty(codes["1"], periods)}
+                      color="bg-cyan-500"
+                  />
+                  <HealthBar 
+                      title="Kısa Vade Yükümlülükler" 
+                      value={latestNonEmpty(codes["2A"], periods)}
+                      total={latestNonEmpty(codes["2"], periods)}
+                      color="bg-orange-500"
+                  />
+                   <HealthBar 
+                      title="Özkaynaklar" 
+                      value={lastEquity}
+                      total={(latestNonEmpty(codes["2"], periods) ?? 0) + (lastEquity ?? 0)}
+                      color="bg-emerald-500"
+                  />
+              </Section>
 
-      {/* Valuation Ratios */}
-      <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-        <Metric title="F/K (TTM)" value={pe} digits={2} />
-        <Metric title="F/S (TTM)" value={ps} digits={2} />
-        <Metric title="PD/DD" value={pb} digits={2} />
-        <Metric title="FD/FAVÖK (TTM)" value={evEbitda} digits={2} />
-        <Metric title="Net Borç/FAVÖK (TTM)" value={ndEbitda} digits={2} />
-      </section>
+              {/* KAP Info */}
+              <Section title="KAP Bilgileri" icon={<FiFileText />}>
+                <div className="space-y-3">
+                  {kapRows.slice(0, 5).map((r, i) => (
+                    <div key={i} className="bg-gray-800/50 p-3 rounded-lg text-sm">
+                      <p className="text-xs text-gray-400 truncate">{r.field}</p>
+                      <p className="font-medium text-white break-words">{r.value || "—"}</p>
+                    </div>
+                  ))}
+                </div>
+              </Section>
 
-      {/* Quarterly mini tables */}
-      <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <MiniSeries title="Satış Gelirleri (Ç)" series={qSales} />
-        <MiniSeries title="FAVÖK (Ç)" series={qEBITDA} />
-        <MiniSeries title="Ana Ort. Net Kar (Ç)" series={qNI} />
-      </section>
-
-      {/* KAP Snapshot */}
-      <section className="space-y-3">
-        <h2 className="text-lg font-semibold">KAP Özeti</h2>
-        {kapRows.length === 0 ? (
-          <div className="text-sm text-gray-500">KAP.table bulunamadı veya boş.</div>
-        ) : (
-          <>
-            {kapQuick.length > 0 && (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                {kapQuick.map((r, i) => (
-                  <div key={i} className="rounded-xl border p-3 bg-white">
-                    <div className="text-xs uppercase text-gray-500 truncate">{r.field}</div>
-                    <div className="text-sm font-medium mt-1 break-words">{r.value || "—"}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-            <details className="mt-2">
-              <summary className="cursor-pointer text-sm text-gray-600 hover:text-gray-800">
-                Tüm KAP alanlarını göster
-              </summary>
-              <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2">
-                {kapRows.slice(0, 200).map((r, i) => (
-                  <div key={i} className="rounded-lg border p-2 bg-white">
-                    <div className="text-[11px] text-gray-500 truncate">{r.field}</div>
-                    <div className="text-sm font-medium break-words">{r.value || "—"}</div>
-                  </div>
-                ))}
-              </div>
-            </details>
-          </>
-        )}
-      </section>
-
-      {/* Raw access links */}
-      <section className="space-y-2">
-        <h2 className="text-lg font-semibold">Ham Dokümanlar</h2>
-        <ul className="list-disc ml-5 text-sm text-blue-700">
-          <li><a className="underline" href={buildApiUrl(`tickers/${ticker}/sheets/FIN.table`)}>FIN.table</a></li>
-          <li><a className="underline" href={buildApiUrl(`tickers/${ticker}/sheets/FIN.tidy`)}>FIN.tidy</a></li>
-          <li><a className="underline" href={buildApiUrl(`tickers/${ticker}/sheets/KAP.table`)}>KAP.table</a></li>
-          <li><a className="underline" href={buildApiUrl(`tickers/${ticker}/sheets/PRICES.table`)}>PRICES.table</a></li>
-          <li><a className="underline" href={buildApiUrl(`tickers/${ticker}/sheets/DASH.table`)}>DASH.table</a></li>
-        </ul>
-      </section>
-    </main>
-  );
-}
-
-// ---- UI bits (Tailwind only) ----
-function Card({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="rounded-2xl border p-4 bg-white shadow-sm">
-      <div className="text-xs text-gray-500">{title}</div>
-      <div className="mt-1">{children}</div>
+              {/* Raw Docs */}
+              <Section title="Ham Veri Linkleri" icon={<FiLink />}>
+                <div className="flex flex-col space-y-2 text-sm">
+                    <a className="text-cyan-400 hover:text-cyan-300 transition-colors" href={buildApiUrl(`tickers/${ticker}/sheets/FIN.table`)}>FIN.table</a>
+                    <a className="text-cyan-400 hover:text-cyan-300 transition-colors" href={buildApiUrl(`tickers/${ticker}/sheets/KAP.table`)}>KAP.table</a>
+                    <a className="text-cyan-400 hover:text-cyan-300 transition-colors" href={buildApiUrl(`tickers/${ticker}/sheets/PRICES.table`)}>PRICES.table</a>
+                </div>
+              </Section>
+          </aside>
+        </div>
+      </main>
     </div>
   );
 }
 
-function Metric({ title, value, digits = 2 }: { title: string; value: number | null; digits?: number }) {
-  return (
-    <div className="rounded-2xl border p-4 bg-white shadow-sm">
-      <div className="text-xs text-gray-500">{title}</div>
-      <div className="mt-1 text-2xl font-semibold">
-        {value == null || !isFinite(value) ? "–" : fmt(value, { maximumFractionDigits: digits })}
-      </div>
-    </div>
-  );
-}
+// ---- NEW FUTURISTIC UI COMPONENTS ----
 
-function MiniSeries({
-  title,
-  series,
-}: {
-  title: string;
-  series: { period: string; value: number | null }[];
-}) {
-  const head = ["Dönem", "Değer"];
-  return (
-    <div className="rounded-2xl border p-4 bg-white shadow-sm">
-      <div className="text-sm font-semibold mb-2">{title}</div>
-      <div className="overflow-x-auto">
-        <table className="min-w-full text-sm">
-          <thead>
-            <tr className="text-left text-gray-500">
-              {head.map((h) => (
-                <th key={h} className="py-1 pr-2">{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {series.map((r, i) => (
-              <tr key={i} className="border-t">
-                <td className="py-1 pr-4 whitespace-nowrap">{r.period}</td>
-                <td className="py-1 pr-4">{fmt(r.value)}</td>
-              </tr>
+const Section = ({ title, icon, children }: { title: string; icon?: React.ReactNode, children: React.ReactNode }) => (
+    <section className="bg-gray-800/50 p-5 rounded-2xl border border-gray-700/50 shadow-lg backdrop-blur-sm">
+        <div className="flex items-center mb-4">
+            <div className="text-cyan-400 mr-3">{icon}</div>
+            <h2 className="text-xl font-bold text-white tracking-tight">{title}</h2>
+        </div>
+        <div>{children}</div>
+    </section>
+);
+
+const MetricCard = ({ title, value, note }: { title: string, value: string, note?: string }) => (
+    <div className="bg-gray-900/70 p-4 rounded-xl border border-gray-700/50 transition-all duration-300 hover:bg-gray-700/50 hover:scale-105 cursor-pointer">
+        <p className="text-sm text-gray-400">{title}</p>
+        <p className="text-2xl font-semibold text-white mt-1">{value}</p>
+        {note && <p className="text-xs text-gray-500 mt-1">{note}</p>}
+    </div>
+);
+
+const RatioCard = ({ title, value }: { title: string, value: number | null }) => {
+    const isHigh = (value || 0) > 25;
+    const isLow = (value || 0) < 0;
+    
+    let colorClass = 'text-white';
+    if(value !== null) {
+      if(isHigh) colorClass = 'text-red-400';
+      if(isLow) colorClass = 'text-yellow-400';
+    }
+
+    return (
+        <div className="flex flex-col items-center justify-center bg-gray-900/70 p-4 rounded-xl border border-gray-700/50 transition-all duration-300 hover:bg-gray-700/50 hover:scale-105 cursor-pointer text-center">
+            <p className="text-sm text-gray-400">{title}</p>
+            <p className={`text-3xl font-bold mt-1 ${colorClass}`}>
+                {fmt(value, {maximumFractionDigits: 2})}
+            </p>
+        </div>
+    );
+};
+
+const MiniSeriesTable = ({ title, series }: { title: string, series: { period: string, value: number | null }[] }) => (
+    <div className="bg-gray-900/70 p-4 rounded-xl border border-gray-700/50 h-full">
+        <h3 className="font-semibold text-white mb-3">{title}</h3>
+        <div className="space-y-2 text-sm">
+            {series.slice(0, 5).map((item, i) => (
+                <div key={i} className="flex justify-between items-center border-b border-gray-800 pb-1 last:border-0">
+                    <span className="text-gray-400">{item.period}</span>
+                    <span className={`font-medium ${item.value === null ? 'text-gray-500' : item.value > 0 ? 'text-green-400' : 'text-red-400'}`}>
+                        {fmtMoney(item.value)}
+                    </span>
+                </div>
             ))}
-          </tbody>
-        </table>
-      </div>
+        </div>
     </div>
-  );
-}
+);
+
+const HealthBar = ({ title, value, total, color }: { title: string, value: number | null, total: number | null, color: string}) => {
+    const percentage = (total && value) ? (value / total) * 100 : 0;
+    
+    return (
+      <div className="mb-4 last:mb-0">
+        <div className="flex justify-between items-end mb-1">
+          <p className="text-sm text-gray-300">{title}</p>
+          <p className="text-lg font-bold text-white">{fmtMoney(value)} ₺</p>
+        </div>
+        <div className="w-full bg-gray-700 rounded-full h-2.5">
+          <div 
+            className={`${color} h-2.5 rounded-full transition-all duration-500`} 
+            style={{ width: `${percentage}%` }}
+          ></div>
+        </div>
+      </div>
+    );
+};
