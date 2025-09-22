@@ -1,5 +1,6 @@
 // src/app/company/[ticker]/page.tsx
 import "server-only";
+import { headers } from "next/headers";
 import type { Metadata } from "next";
 
 export const dynamic = "force-dynamic"; // her istekte taze çek
@@ -19,18 +20,43 @@ type SheetTable = {
 
 // ---- Helpers ----
 
-// API URL'yi güvenli kur: default relative, opsiyonel NEXT_PUBLIC_BASE_URL override
-function buildApiUrl(path: string) {
+// Sağlam base URL çözümü:
+// 1) NEXT_PUBLIC_BASE_URL (ör. https://easy-fin-...vercel.app)
+// 2) VERCEL_URL (ör. easy-fin-...vercel.app) + https
+// 3) x-forwarded-host/proto header’ları
+// 4) localhost:3000
+function getBaseUrl(): string {
+  const envBase = process.env.NEXT_PUBLIC_BASE_URL?.trim();
+  if (envBase) return envBase.replace(/\/+$/, "");
+
+  const vercelUrl = process.env.VERCEL_URL?.trim();
+  if (vercelUrl) return `https://${vercelUrl.replace(/\/+$/, "")}`;
+
+  try {
+    const h = headers();
+    const host = h.get("x-forwarded-host") || h.get("host");
+    const proto =
+      h.get("x-forwarded-proto") ||
+      (host && host.startsWith("localhost") ? "http" : "https");
+    if (host) return `${proto}://${host}`.replace(/\/+$/, "");
+  } catch {
+    // headers() bazı ortamlarda kullanılamazsa sessiz geç
+  }
+
+  return "http://localhost:3000";
+}
+
+function buildApiUrl(path: string): string {
   const rel = `/api/debug/firestore?path=${encodeURIComponent(path)}`;
-  const base = process.env.NEXT_PUBLIC_BASE_URL?.trim();
-  return base ? `${base}${rel}` : rel;
+  // Mutlaka absolute yap: Node fetch relative kabul etmiyor
+  return new URL(rel, getBaseUrl()).toString();
 }
 
 async function getSheetDoc<T = any>(path: string): Promise<T | null> {
-  // Doküman / koleksiyon guard: doküman = çift segment sayısı
+  // Doküman/koleksiyon guard (doküman = çift segment)
   const segs = path.split("/").filter(Boolean);
   if (segs.length % 2 !== 0) {
-    console.error("[getSheetDoc] Koleksiyon path verilmiş (doküman bekleniyordu):", path);
+    console.error("[getSheetDoc] Koleksiyon path (doküman bekleniyordu):", path);
     return null;
   }
 
@@ -48,7 +74,6 @@ async function getSheetDoc<T = any>(path: string): Promise<T | null> {
       console.error("[getSheetDoc] json.ok=false", url, json);
       return null;
     }
-    // /api/debug/firestore dokümanda { ok, data } döndürür
     return json.data ?? null;
   } catch (e) {
     console.error("[getSheetDoc] fetch error", url, e);
@@ -62,7 +87,6 @@ function toNum(x: any): number | null {
   if (typeof x !== "string") return null;
   const s = x.trim();
   if (!s) return null;
-  // TR formatı "15,59", binlik "1.234.567,89"
   const norm = s.replace(/\./g, "").replace(/,/g, ".");
   const n = Number(norm);
   return isFinite(n) ? n : null;
@@ -82,7 +106,6 @@ function fmtMoney(n: number | null | undefined) {
 }
 
 function pickPeriods(fin: SheetTable): string[] {
-  // FIN.table: ilk 5 kolon meta, sonra dönem kolonları (yeni ⇒ eski)
   const h = fin.header ?? [];
   return h.slice(5);
 }
@@ -133,18 +156,15 @@ export async function generateMetadata({
   params: { ticker: string };
 }): Promise<Metadata> {
   const ticker = params.ticker?.toUpperCase?.() || "TICKER";
-  return {
-    title: `${ticker} • Finansal Analiz`,
-  };
+  return { title: `${ticker} • Finansal Analiz` };
 }
 
 export default async function CompanyPage({ params }: { params: { ticker: string } }) {
   const ticker = (params?.ticker || "").toUpperCase();
 
-  // Firestore'dan 5 tabloyu çek
   const [fin, tidy, kap, prices, dash] = await Promise.all([
     getSheetDoc<SheetTable>(`tickers/${ticker}/sheets/FIN.table`),
-    getSheetDoc<SheetTable>(`tickers/${ticker}/sheets/FIN.tidy`), // ileride grafik/filtre için hazır
+    getSheetDoc<SheetTable>(`tickers/${ticker}/sheets/FIN.tidy`),
     getSheetDoc<SheetTable>(`tickers/${ticker}/sheets/KAP.table`),
     getSheetDoc<SheetTable>(`tickers/${ticker}/sheets/PRICES.table`),
     getSheetDoc<SheetTable>(`tickers/${ticker}/sheets/DASH.table`),
@@ -158,7 +178,7 @@ export default async function CompanyPage({ params }: { params: { ticker: string
           FIN.table bulunamadı. Firestore path: <code>tickers/{ticker}/sheets/FIN.table</code>
         </p>
         <div className="mt-2 text-sm text-gray-500">
-          API: <code>/api/debug/firestore?path=tickers%2F{ticker}%2Fsheets%2FFIN.table</code>
+          API: <code>{buildApiUrl(`tickers/${ticker}/sheets/FIN.table`)}</code>
         </div>
       </main>
     );
@@ -175,9 +195,9 @@ export default async function CompanyPage({ params }: { params: { ticker: string
   // Temel kalemler
   const netSales = codes["3C"];
   const grossProfit = codes["3D"];
-  const mktExp = codes["3DA"]; // negatif
-  const adminExp = codes["3DB"]; // negatif
-  const rndExp = codes["3DC"]; // çoğu şirkette 0
+  const mktExp = codes["3DA"];
+  const adminExp = codes["3DB"];
+  const rndExp = codes["3DC"];
   const depAmort = codes["4B"];
   const opProfit = codes["3DF"];
   const parentNI = codes["3Z"];
@@ -188,7 +208,7 @@ export default async function CompanyPage({ params }: { params: { ticker: string
   const ltDebt = codes["2BA"];
   const parentEquity = codes["2O"];
 
-  // TTM hesapları (son 4 çeyrek)
+  // TTM
   const ttmSales = sumLastN(netSales, periods, 4);
   const ttmGross = sumLastN(grossProfit, periods, 4);
   const ttmDep = sumLastN(depAmort, periods, 4);
@@ -196,7 +216,6 @@ export default async function CompanyPage({ params }: { params: { ticker: string
   const ttmAdm = sumLastN(adminExp, periods, 4);
   const ttmRND = sumLastN(rndExp, periods, 4) ?? 0;
 
-  // EBITDA ≈ Brüt Kar + Paz. + GY + AR-GE + Amortisman (giderler negatif geldiği için topluyoruz)
   const ttmEBITDA =
     ttmGross != null && ttmMkt != null && ttmAdm != null && ttmDep != null
       ? ttmGross + ttmMkt + ttmAdm + ttmRND + ttmDep
@@ -204,7 +223,7 @@ export default async function CompanyPage({ params }: { params: { ticker: string
 
   const ttmNI = sumLastN(parentNI, periods, 4);
 
-  // Son bilanço değerleri (en yeni dönem)
+  // Son bilanço
   const lastCash = latestNonEmpty(cash, periods);
   const lastStDebt = latestNonEmpty(stDebt, periods);
   const lastLtDebt = latestNonEmpty(ltDebt, periods);
@@ -219,7 +238,7 @@ export default async function CompanyPage({ params }: { params: { ticker: string
   const evEbitda = lastMcap != null && ttmEBITDA ? (lastMcap + (netDebt ?? 0)) / ttmEBITDA : null;
   const ndEbitda = ttmEBITDA ? (netDebt ?? 0) / ttmEBITDA : null;
 
-  // Grafik/seri için birkaç kalem (son 8 çeyrek)
+  // Seriler (son 8 çeyrek)
   const take = 8;
   const qSales = quarterSeries((k) => toNum(netSales?.[k]) ?? null, periods, take);
   const qNI = quarterSeries((k) => toNum(parentNI?.[k]) ?? null, periods, take);
@@ -233,7 +252,7 @@ export default async function CompanyPage({ params }: { params: { ticker: string
     return (gp ?? 0) + (mk ?? 0) + (ad ?? 0) + rd + (dp ?? 0);
   }, periods, take);
 
-  // KAP (flatten tablo: header ["field","value"])
+  // KAP (flatten: header ["field","value"])
   const kapRows: Array<{ field: string; value: string }> = Array.isArray(kap?.rows)
     ? kap!.rows.map((r: any) => ({
         field: String(r?.field ?? r?.Field ?? r?.key ?? ""),
@@ -342,46 +361,11 @@ export default async function CompanyPage({ params }: { params: { ticker: string
       <section className="space-y-2">
         <h2 className="text-lg font-semibold">Ham Dokümanlar</h2>
         <ul className="list-disc ml-5 text-sm text-blue-700">
-          <li>
-            <a
-              className="underline"
-              href={`/api/debug/firestore?path=${encodeURIComponent(`tickers/${ticker}/sheets/FIN.table`)}`}
-            >
-              FIN.table
-            </a>
-          </li>
-          <li>
-            <a
-              className="underline"
-              href={`/api/debug/firestore?path=${encodeURIComponent(`tickers/${ticker}/sheets/FIN.tidy`)}`}
-            >
-              FIN.tidy
-            </a>
-          </li>
-          <li>
-            <a
-              className="underline"
-              href={`/api/debug/firestore?path=${encodeURIComponent(`tickers/${ticker}/sheets/KAP.table`)}`}
-            >
-              KAP.table
-            </a>
-          </li>
-          <li>
-            <a
-              className="underline"
-              href={`/api/debug/firestore?path=${encodeURIComponent(`tickers/${ticker}/sheets/PRICES.table`)}`}
-            >
-              PRICES.table
-            </a>
-          </li>
-          <li>
-            <a
-              className="underline"
-              href={`/api/debug/firestore?path=${encodeURIComponent(`tickers/${ticker}/sheets/DASH.table`)}`}
-            >
-              DASH.table
-            </a>
-          </li>
+          <li><a className="underline" href={buildApiUrl(`tickers/${ticker}/sheets/FIN.table`)}>FIN.table</a></li>
+          <li><a className="underline" href={buildApiUrl(`tickers/${ticker}/sheets/FIN.tidy`)}>FIN.tidy</a></li>
+          <li><a className="underline" href={buildApiUrl(`tickers/${ticker}/sheets/KAP.table`)}>KAP.table</a></li>
+          <li><a className="underline" href={buildApiUrl(`tickers/${ticker}/sheets/PRICES.table`)}>PRICES.table</a></li>
+          <li><a className="underline" href={buildApiUrl(`tickers/${ticker}/sheets/DASH.table`)}>DASH.table</a></li>
         </ul>
       </section>
     </main>
@@ -425,9 +409,7 @@ function MiniSeries({
           <thead>
             <tr className="text-left text-gray-500">
               {head.map((h) => (
-                <th key={h} className="py-1 pr-2">
-                  {h}
-                </th>
+                <th key={h} className="py-1 pr-2">{h}</th>
               ))}
             </tr>
           </thead>
