@@ -183,36 +183,21 @@ export default async function CompanyPage({ params }: { params: { ticker: string
   const periods = pickPeriods(fin); // new → old
   const codes = rowByCode(fin);
 
-  // ---------- PRICES (tam kesin: "Price1" = fiyat, "Price2" = piyasa_değeri)
-  // Tablo yapısı değişse bile satırları KEY→VALUE haritasına çeviriyoruz.
-  const priceMap = mapByKey(prices?.rows || [], ["kod", "key", "id", "name", "field"]);
-  // 1) Önce codebook key'leri
-  let lastPrice = numFromRow(priceMap["Price1"]);
-  let marketCap = numFromRow(priceMap["Price2"]);
-  // 2) Yoksa aynı satırda alan isimleriyle (örn: fiyat, piyasa_değeri)
-  if (lastPrice == null) {
-    for (const r of prices?.rows || []) {
-      lastPrice =
-        toNum(r?.["fiyat"]) ??
-        toNum(r?.["Fiyat"]) ??
-        toNum(r?.["price"]) ??
-        toNum(r?.["Price"]);
-      if (lastPrice != null) break;
-    }
-  }
-  if (marketCap == null) {
-    for (const r of prices?.rows || []) {
-      marketCap =
-        toNum(r?.["piyasa_değeri"]) ??
-        toNum(r?.["Piyasa Değeri"]) ??
-        toNum(r?.["market_cap"]) ??
-        toNum(r?.["MarketCap"]);
-      if (marketCap != null) break;
-    }
-  }
-  // 3) En sonda ilk satır fallback (eski veri girişleri için)
-  if (lastPrice == null) lastPrice = toNum(prices?.rows?.[0]?.["fiyat"]) ?? toNum(prices?.rows?.[0]?.["price"]);
-  if (marketCap == null) marketCap = toNum(prices?.rows?.[0]?.["piyasa_değeri"]) ?? toNum(prices?.rows?.[0]?.["market_cap"]);
+  // ---------- PRICES (KESİN: sadece Price1/Price2 satırları) ----------
+  const pMap = mapByKey(prices?.rows || [], ["kod"]);
+  const lastPrice =
+    toNum(pMap?.["Price1"]?.["fiyat"]) ??
+    toNum(pMap?.["Price1"]?.["Fiyat"]) ??
+    toNum(pMap?.["Price1"]?.["price"]) ??
+    toNum(pMap?.["Price1"]?.["Price"]) ??
+    null;
+
+  const marketCap =
+    toNum(pMap?.["Price2"]?.["piyasa_değeri"]) ??
+    toNum(pMap?.["Price2"]?.["Piyasa Değeri"]) ??
+    toNum(pMap?.["Price2"]?.["market_cap"]) ??
+    toNum(pMap?.["Price2"]?.["MarketCap"]) ??
+    null;
 
   // ---------- KAP (summary.* / general.* exact path)
   const kapMap = mapByKey(kap?.rows || [], ["field", "key", "name", "kod", "id"]);
