@@ -190,3 +190,13 @@ export const listDriveSheets = functions.https.onRequest(async (_req, res) => {
   }
 });
 
+export const ingestAllNow = functions.https.onRequest(async (_req, res) => {
+  try {
+    const folderId = await getFolderId();
+    const files = await listSheetsInFolder(folderId);
+    await Promise.all(files.map(f => ingestOne(f.id, f.name)));
+    res.send(`ok: ${files.length} şirket`);
+  } catch (e:any) {
+    res.status(500).send(String(e));
+  }
+});
