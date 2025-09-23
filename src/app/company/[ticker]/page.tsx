@@ -183,21 +183,13 @@ export default async function CompanyPage({ params }: { params: { ticker: string
   const periods = pickPeriods(fin); // new → old
   const codes = rowByCode(fin);
 
-  // ---------- PRICES (KESİN: sadece Price1/Price2 satırları) ----------
   const pMap = mapByKey(prices?.rows || [], ["kod"]);
-  const lastPrice =
-    toNum(pMap?.["Price1"]?.["fiyat"]) ??
-    toNum(pMap?.["Price1"]?.["Fiyat"]) ??
-    toNum(pMap?.["Price1"]?.["price"]) ??
-    toNum(pMap?.["Price1"]?.["Price"]) ??
-    null;
 
-  const marketCap =
-    toNum(pMap?.["Price2"]?.["piyasa_değeri"]) ??
-    toNum(pMap?.["Price2"]?.["Piyasa Değeri"]) ??
-    toNum(pMap?.["Price2"]?.["market_cap"]) ??
-    toNum(pMap?.["Price2"]?.["MarketCap"]) ??
-    null;
+  // Şimdi 'numFromRow' fonksiyonunu kullanarak değerleri güvenli bir şekilde alıyoruz.
+  // Bu yöntem, sütun adının "fiyat", "value" veya "deger" olmasından etkilenmez
+  // ve "15,36" gibi virgüllü sayıları doğru şekilde işler.
+  const lastPrice = numFromRow(pMap?.["Price1"]);
+  const marketCap = numFromRow(pMap?.["Price2"]);
 
   // ---------- KAP (summary.* / general.* exact path)
   const kapMap = mapByKey(kap?.rows || [], ["field", "key", "name", "kod", "id"]);
