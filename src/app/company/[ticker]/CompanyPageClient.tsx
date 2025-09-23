@@ -1,3 +1,4 @@
+// src/app/company/[ticker]/CompanyPageClient.tsx
 "use client";
 
 import { useState, useEffect, useRef } from 'react';
@@ -179,7 +180,7 @@ export default function CompanyPageClient({ data }: { data: PageData }) {
   );
 }
 
-// --- TÜM YARDIMCI VE GRAFİK BİLEŞENLERİ ---
+// --- YARDIMCI / GRAFİK ---
 function AnimatedSection({ id, setActive, children }: { id: string; setActive: (id: string) => void; children: React.ReactNode; }) {
   const ref = useRef(null);
   const isInView = useInView(ref, { amount: 0.3, once: false });
@@ -306,7 +307,11 @@ function CashFlowWaterfallChart({ data }: { data: any[]; }) {
         <BarChart data={processedData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
           <XAxis dataKey="name" stroke="#9ca3af" />
           <YAxis stroke="#9ca3af" tickFormatter={(tick) => fmtMoney(tick) as string} />
-          <Tooltip cursor={{ fill: 'rgba(255,255,255,0.1)' }} contentStyle={{ backgroundColor: '#1f2937', border: '1px solid #374151' }} formatter={(value: any) => fmtMoney(value)} />
+          <Tooltip
+  cursor={{ fill: 'rgba(255,255,255,0.1)' }}
+  contentStyle={{ backgroundColor: '#1f2937', border: '1px solid #374151' }}
+  formatter={(value: any) => fmtMoney(value)}
+/>
           <Bar dataKey="start" stackId="a" fill="transparent" />
           <Bar dataKey="value" stackId="a">
             {processedData.map((entry, index) => (

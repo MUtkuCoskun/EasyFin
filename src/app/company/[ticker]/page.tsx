@@ -70,17 +70,31 @@ function mapByKey(
 }
 function numFromRow(r: any): number | null {
   if (!r) return null;
-  const cands = ["value", "val", "v", "deger", "deg", "amount", "sonuc", "result"];
+  const cands = ["Value", "value", "val", "v", "deger", "deg", "amount", "sonuc", "result"];
   for (const c of cands) {
-    const n = toNum(r?.[c]);
+    const n = toNum((r as any)?.[c]);
     if (n != null) return n;
   }
-  // yoksa satırdaki ilk sayıyı yakala
   for (const v of Object.values(r)) {
     const n = toNum(v as any);
     if (n != null) return n;
   }
   return null;
+}
+
+// PRICES için ÖZEL: Kod + Field → tekil anahtar
+function mapPricesByKeyField(rows: any[]): Record<string, any> {
+  const m: Record<string, any> = {};
+  for (const r of rows || []) {
+    const kod = (r?.Kod ?? r?.kod)?.toString().trim();
+    const field = (r?.Field ?? r?.field)?.toString().trim();
+    if (kod && field) {
+      m[`${kod}_${field}`] = r; // örn: "Price1_fiyat"
+    } else if (kod) {
+      m[kod] = r; // nadiren Field yoksa
+    }
+  }
+  return m;
 }
 
 // --------- BASE URL + AUTH (ASYNC) ----------
@@ -183,13 +197,29 @@ export default async function CompanyPage({ params }: { params: { ticker: string
   const periods = pickPeriods(fin); // new → old
   const codes = rowByCode(fin);
 
-  const pMap = mapByKey(prices?.rows || [], ["kod"]);
+  // ---------- PRICES (KESİN: Kod + Field → Value) ----------
+  const priceRows = Array.isArray(prices?.rows)
+    ? prices!.rows
+    : Array.isArray(prices as any)
+    ? (prices as any)
+    : Object.values((prices as any) || {});
+  const pMapPrices = mapPricesByKeyField(priceRows);
 
-  // Şimdi 'numFromRow' fonksiyonunu kullanarak değerleri güvenli bir şekilde alıyoruz.
-  // Bu yöntem, sütun adının "fiyat", "value" veya "deger" olmasından etkilenmez
-  // ve "15,36" gibi virgüllü sayıları doğru şekilde işler.
-  const lastPrice = numFromRow(pMap?.["Price1"]);
-  const marketCap = numFromRow(pMap?.["Price2"]);
+  // Price1_fiyat → Son fiyat, Price2_piyasa_değeri → Piyasa değeri
+  // (türkçe karakter varyasyonlarına da tolerans)
+  const lastPrice =
+    toNum(pMapPrices?.["Price1_fiyat"]?.Value ?? pMapPrices?.["Price1_fiyat"]?.value) ??
+    toNum(pMapPrices?.["Price1_Fiyat"]?.Value ?? pMapPrices?.["Price1_Fiyat"]?.value);
+
+  const marketCap =
+    toNum(
+      pMapPrices?.["Price2_piyasa_değeri"]?.Value ??
+        pMapPrices?.["Price2_piyasa_değeri"]?.value
+    ) ??
+    toNum(
+      pMapPrices?.["Price2_piyasa_degeri"]?.Value ??
+        pMapPrices?.["Price2_piyasa_degeri"]?.value
+    );
 
   // ---------- KAP (summary.* / general.* exact path)
   const kapMap = mapByKey(kap?.rows || [], ["field", "key", "name", "kod", "id"]);
@@ -309,7 +339,6 @@ export default async function CompanyPage({ params }: { params: { ticker: string
 
   // ---------- Ownership ----------
   let shareholders: Array<{ name: string; value: number }> = [];
-  // ownership.sermaye_5ustu[*] yapısını tara
   const kapKeys = Object.keys(kapMap);
   const indices = new Set<number>();
   for (const k of kapKeys) {
@@ -323,7 +352,6 @@ export default async function CompanyPage({ params }: { params: { ticker: string
   }
   if (!shareholders.length) shareholders = [{ name: "Veri Bekleniyor", value: 100 }];
 
-  // Bağlı ortaklık isimleri
   const subsidiaries: string[] = [];
   for (const k of kapKeys) {
     const m = k.match(/^ownership\.bagli_ortakliklar\[(\d+)\]\.Ticaret Ünvanı$/i);
@@ -394,7 +422,7 @@ export default async function CompanyPage({ params }: { params: { ticker: string
       revenue: lastRevenue,
       cost: lastCOGS,
       grossProfit: lastGross,
-      expenses: null, // client sankey 'expenses' bekliyor; opex'i orada isimlendiriyoruz
+      expenses: null,
       earnings: lastOpProfit,
       opex: lastOpex,
     },
