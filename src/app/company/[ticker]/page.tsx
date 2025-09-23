@@ -51,7 +51,7 @@ function sumLastN(row: any, periodKeys: string[], n: number): number | null {
   return vals.slice(0, n).reduce((a, b) => a + b, 0);
 }
 
-// --------- EXACT LOOKUP HELPERS (codebook anahtarlarıyla) ----------
+// --------- EXACT LOOKUP HELPERS ----------
 function mapByKey(
   rows: any[],
   keyFields = ["kod", "key", "id", "name", "field", "başlık", "baslik"]
@@ -183,20 +183,38 @@ export default async function CompanyPage({ params }: { params: { ticker: string
   const periods = pickPeriods(fin); // new → old
   const codes = rowByCode(fin);
 
-  // ---------- PRICES (Price1 / Price2 kesin) ----------
-  const pRow = prices?.rows?.[0] || {};
-  const lastPrice =
-    toNum(pRow?.["Price1"]) ?? // codebook
-    toNum(pRow?.["fiyat"]) ??
-    toNum(pRow?.["price"]);
-  const marketCap =
-    toNum(pRow?.["Price2"]) ?? // codebook
-    toNum(pRow?.["piyasa_değeri"]) ??
-    toNum(pRow?.["piyasa_deÄŸeri"]) ??
-    toNum(pRow?.["market_cap"]) ??
-    toNum(pRow?.["marketcap"]);
+  // ---------- PRICES (tam kesin: "Price1" = fiyat, "Price2" = piyasa_değeri)
+  // Tablo yapısı değişse bile satırları KEY→VALUE haritasına çeviriyoruz.
+  const priceMap = mapByKey(prices?.rows || [], ["kod", "key", "id", "name", "field"]);
+  // 1) Önce codebook key'leri
+  let lastPrice = numFromRow(priceMap["Price1"]);
+  let marketCap = numFromRow(priceMap["Price2"]);
+  // 2) Yoksa aynı satırda alan isimleriyle (örn: fiyat, piyasa_değeri)
+  if (lastPrice == null) {
+    for (const r of prices?.rows || []) {
+      lastPrice =
+        toNum(r?.["fiyat"]) ??
+        toNum(r?.["Fiyat"]) ??
+        toNum(r?.["price"]) ??
+        toNum(r?.["Price"]);
+      if (lastPrice != null) break;
+    }
+  }
+  if (marketCap == null) {
+    for (const r of prices?.rows || []) {
+      marketCap =
+        toNum(r?.["piyasa_değeri"]) ??
+        toNum(r?.["Piyasa Değeri"]) ??
+        toNum(r?.["market_cap"]) ??
+        toNum(r?.["MarketCap"]);
+      if (marketCap != null) break;
+    }
+  }
+  // 3) En sonda ilk satır fallback (eski veri girişleri için)
+  if (lastPrice == null) lastPrice = toNum(prices?.rows?.[0]?.["fiyat"]) ?? toNum(prices?.rows?.[0]?.["price"]);
+  if (marketCap == null) marketCap = toNum(prices?.rows?.[0]?.["piyasa_değeri"]) ?? toNum(prices?.rows?.[0]?.["market_cap"]);
 
-  // ---------- KAP (summary.* / general.* path ile kesin) ----------
+  // ---------- KAP (summary.* / general.* exact path)
   const kapMap = mapByKey(kap?.rows || [], ["field", "key", "name", "kod", "id"]);
   const getKapExact = (path: string): string => {
     const r = kapMap[path];
@@ -205,7 +223,7 @@ export default async function CompanyPage({ params }: { params: { ticker: string
     return typeof v === "string" ? v : String(v ?? "");
   };
 
-  // ---------- DASH (Dash* / D.VAL.* anahtarlarıyla kesin) ----------
+  // ---------- DASH (Dash* / D.VAL.* exact)
   const dashMap = mapByKey(dash?.rows || [], ["kod", "key", "id", "name", "field", "ratio", "metric"]);
   const dashNum = (...keys: string[]): number | null => {
     for (const k of keys) {
@@ -215,7 +233,7 @@ export default async function CompanyPage({ params }: { params: { ticker: string
     return null;
   };
 
-  // --- IS rows by code (robust to missing, ama kesin kodlar)
+  // --- Income Statement (kesin kodlar) ---
   const netSales     = codes["3C"];
   const costOfSales  = codes["3CA"];
   const grossProfit  = codes["3D"];
@@ -234,7 +252,7 @@ export default async function CompanyPage({ params }: { params: { ticker: string
   const lastOpProfit = dashNum("Dash11","FAALİYET KARI (ZARARI)") ?? latestNonEmpty(opProfit, periods);
   const lastNI       = dashNum("Dash15","Ana Ortaklık Net Karı") ?? latestNonEmpty(netIncome, periods);
 
-  // OPEX (Dash satırları ayrı ayrı tutuluyorsa topla; yoksa FIN)
+  // OPEX (Dash varsa topla; yoksa FIN)
   const dM = dashNum("Dash5","Pazarlama Giderleri (-)");
   const dA = dashNum("Dash6","Genel Yönetim Giderleri (-)");
   const dR = dashNum("Dash7","Araştırma Geliştirme Giderleri (-)");
@@ -248,10 +266,10 @@ export default async function CompanyPage({ params }: { params: { ticker: string
           return [m, a].some((x) => x == null) ? null : (m ?? 0) + (a ?? 0) + r;
         })();
 
-  // ---------- Balance sheet (kesin kodlar) ----------
+  // ---------- Balance Sheet (kesin kodlar) ----------
   const cash         = latestNonEmpty(codes["1AA"], periods);
   const receivables  = latestNonEmpty(codes["1AC"], periods);
-  const inventory    = latestNonEmpty(codes["1AF"], periods); // DÜZELTME: Stoklar 1AF
+  const inventory    = latestNonEmpty(codes["1AF"], periods); // Stoklar = 1AF
   const stDebt       = latestNonEmpty(codes["2AA"], periods);
   const ltDebt       = latestNonEmpty(codes["2BA"], periods);
   const equity       = latestNonEmpty(codes["2O"],  periods);
@@ -264,7 +282,7 @@ export default async function CompanyPage({ params }: { params: { ticker: string
       ? Math.max(currLiab + nonCurrLiab - totalDebt, 0)
       : null;
 
-  // ---------- TTM hesapları ----------
+  // ---------- TTM ----------
   const ttmSales   = sumLastN(netSales, periods, 4);
   const ttmDep     = sumLastN(depAmort, periods, 4);
   const ttmNI      = sumLastN(netIncome, periods, 4);
@@ -277,88 +295,89 @@ export default async function CompanyPage({ params }: { params: { ticker: string
       ? ttmGross + ttmM + ttmA + ttmR + ttmDep
       : null;
 
-  const netDebt = totalDebt - (cash ?? 0);
+  const netDebt = (stDebt ?? 0) + (ltDebt ?? 0) - (cash ?? 0);
 
-  // ---------- Değerleme rasyoları (önce D.VAL.*) ----------
+  // ---------- Değerleme (önce D.VAL.*; yoksa kesin fallback formülleri) ----------
   const pe =
     dashNum("D.VAL.PE", "F/K") ??
     (marketCap != null && ttmNI ? marketCap / ttmNI : null);
+
   const pb =
-    dashNum("D.VAL.PB", "PD/DD") ?? null;
+    dashNum("D.VAL.PB", "PD/DD") ??
+    (marketCap != null && equity != null && equity !== 0 ? marketCap / equity : null);
+
   const ps =
-    dashNum("D.VAL.PS", "FD/Satış", "Fiyat/Satış") ??
+    dashNum("D.VAL.PS", "Fiyat/Satış", "FD/Satış") ??
     (marketCap != null && ttmSales ? marketCap / ttmSales : null);
+
   const evEbitda =
     dashNum("D.VAL.EVEBITDA", "FD/FAVÖK") ??
-    (marketCap != null && ttmEBITDA != null
+    (marketCap != null && ttmEBITDA != null && ttmEBITDA !== 0
       ? (marketCap + (netDebt ?? 0)) / ttmEBITDA
       : null);
+
   const ndEbitda =
     dashNum("D.VAL.NETDEBT_EBITDA", "Net Borç/FAVÖK") ??
     (ttmEBITDA ? (netDebt ?? 0) / ttmEBITDA : null);
 
-  // ---------- KAP flatten (exact path öncelikli + basit fallback) ----------
-  // Not: KAP.table "field/value" ise path ile direkt çekiyoruz.
+  // ---------- KAP exact (ad, sektör, adres, web) ----------
   const companyName =
     getKapExact("general.trade_name") ||
     getKapExact("summary.trade_name") ||
     `${ticker} A.Ş.`;
-  const sector   = getKapExact("summary.sektor_ana") || "";
-  const subSector= getKapExact("summary.sektor_alt") || "";
-  const address  = getKapExact("general.merkez_adresi");
-  const website  = getKapExact("summary.internet_adresi") || "";
+  const sector    = getKapExact("summary.sektor_ana") || "";
+  const subSector = getKapExact("summary.sektor_alt") || "";
+  const address   = getKapExact("general.merkez_adresi");
+  const website   = getKapExact("summary.internet_adresi") || "";
 
-  // ---------- Ownership & Management (path varsa kullan, yoksa basit fallback) ----------
-  // Pay dağılımı (ownership.sermaye_5ustu tablo gibi saklanıyorsa)
+  // ---------- Ownership ----------
   let shareholders: Array<{ name: string; value: number }> = [];
-  const top5 = dashMap["K.OWN.TOP5.TABLE"]?.rows || kapMap["ownership.sermaye_5ustu"]?.rows;
-  if (Array.isArray(top5) && top5.length) {
-    shareholders = top5
-      .map((r: any) => ({
-        name: String(r["Ortağın Adı-Soyadı/Ticaret Ünvanı"] ?? r["NAME"] ?? "Ortak"),
-        value:
-          toNum(r["Sermayedeki Payı(%)"]) ??
-          toNum(r["PCT"]) ??
-          0,
-      }))
-      .filter((x: any) => (x.value ?? 0) > 0);
+  // ownership.sermaye_5ustu[*] yapısını tara
+  const kapKeys = Object.keys(kapMap);
+  const indices = new Set<number>();
+  for (const k of kapKeys) {
+    const m = k.match(/^ownership\.sermaye_5ustu\[(\d+)\]\.Sermayedeki Payı\(%\)$/i);
+    if (m) indices.add(Number(m[1]));
   }
-  if (!shareholders.length) {
-    shareholders = [{ name: "Veri Bekleniyor", value: 100 }];
+  for (const i of Array.from(indices).sort((a, b) => a - b)) {
+    const name = getKapExact(`ownership.sermaye_5ustu[${i}].Ortağın Adı-Soyadı/Ticaret Ünvanı`) || "Ortak";
+    const pct  = toNum(getKapExact(`ownership.sermaye_5ustu[${i}].Sermayedeki Payı(%)`));
+    if (name && pct != null) shareholders.push({ name, value: pct });
   }
+  if (!shareholders.length) shareholders = [{ name: "Veri Bekleniyor", value: 100 }];
 
-  // Bağlı ortaklıklar (ownership.bagli_ortakliklar[*].Ticaret Ünvanı vb. path'lerden basit toparlama)
+  // Bağlı ortaklık isimleri
   const subsidiaries: string[] = [];
-  for (const key of Object.keys(kapMap)) {
-    if (/^ownership\.bagli_ortakliklar\[\d+\]\.Ticaret Ünvanı$/i.test(key)) {
-      const v = getKapExact(key);
+  for (const k of kapKeys) {
+    const m = k.match(/^ownership\.bagli_ortakliklar\[(\d+)\]\.Ticaret Ünvanı$/i);
+    if (m) {
+      const v = getKapExact(k);
       if (v) subsidiaries.push(v);
     }
   }
   if (!subsidiaries.length) subsidiaries.push("Veri Bekleniyor");
 
-  // Yönetim (board_members[*].Adı-Soyadı / Görevi)
+  // Yönetim (Adı-Soyadı + Görevi)
   const management: Array<{ name: string; position: string }> = [];
-  for (const key of Object.keys(kapMap)) {
-    const mName = key.match(/^board_members\[(\d+)\]\.Adı-Soyadı$/i);
-    if (mName) {
-      const idx = mName[1];
+  for (const k of kapKeys) {
+    const m = k.match(/^board_members\[(\d+)\]\.Adı-Soyadı$/i);
+    if (m) {
+      const idx = m[1];
       const name = getKapExact(`board_members[${idx}].Adı-Soyadı`);
-      const role =
-        getKapExact(`board_members[${idx}].Görevi`) || "Yönetim Kurulu Üyesi";
+      const role = getKapExact(`board_members[${idx}].Görevi`) || "Yönetim Kurulu Üyesi";
       if (name) management.push({ name, position: role });
     }
   }
   if (!management.length) management.push({ name: "Veri Bekleniyor", position: "Yönetim Kurulu" });
 
-  // ---------- Waterfall (Dash key'leri varsa kullan) ----------
+  // ---------- Waterfall ----------
   const wNWC = dashNum("DashNWC", "Net İşletme Sermayesi", "NWC") ?? 0;
   const wOth = dashNum("DashOthers", "Diğer") ?? 0;
   const wFCF =
     dashNum("DashFCF", "4CB", "Serbest Nakit Akım") ??
     ((lastNI ?? 0) + (lastDep ?? 0) + wNWC + wOth);
 
-  // ---------- Treemap arrays in billions ₺ ----------
+  // ---------- Treemap arrays (₺ bn) ----------
   const toB = (x: number | null) => (x == null ? 0 : x / 1e9);
   const assetsArr = [
     { name: "Nakit + KV Yat.", value: toB(cash), color: "#14b8a6" },
@@ -367,11 +386,11 @@ export default async function CompanyPage({ params }: { params: { ticker: string
   ].filter((d) => d.value > 0);
   const liabArr = [
     { name: "Özkaynaklar", value: toB(equity ?? 0), color: "#60a5fa" },
-    { name: "Toplam Borç", value: toB(totalDebt), color: "#ef4444" },
+    { name: "Toplam Borç", value: toB((stDebt ?? 0) + (ltDebt ?? 0)), color: "#ef4444" },
     ...(otherLiab != null ? [{ name: "Diğer Yük.", value: toB(otherLiab), color: "#f59e0b" }] : []),
   ].filter((d) => d.value > 0);
 
-  // ---- Build page data for client (UI aynı kaldı) ----
+  // ---- Build page data ----
   const pageData = {
     ticker,
     generalInfo: {
@@ -398,8 +417,9 @@ export default async function CompanyPage({ params }: { params: { ticker: string
       revenue: lastRevenue,
       cost: lastCOGS,
       grossProfit: lastGross,
-      opex: lastOpex,
+      expenses: null, // client sankey 'expenses' bekliyor; opex'i orada isimlendiriyoruz
       earnings: lastOpProfit,
+      opex: lastOpex,
     },
     cashFlow: [
       { name: "Net Kâr", value: lastNI },
