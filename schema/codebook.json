@@ -30,7 +30,12 @@
     "Dash27": "Brüt Kar Marjı",
     "Dash28": "FAVÖK Marjı",
     "Dash29": "Net Kar Marjı",
-    "Dash30": "Cari Oran"
+    "Dash30": "Cari Oran",
+    "Dash31": "F/K",
+    "Dash32": "PD/DD",
+    "Dash33": "FD/Satışlar",
+    "Dash34": "FD/FAVÖK",
+    "Dash35": "Net Borç/FAVÖK"
   },
 
   "prices": {

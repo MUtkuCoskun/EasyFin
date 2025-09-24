@@ -304,28 +304,37 @@ export default async function CompanyPage({ params }: { params: { ticker: string
 
   const netDebt = (stDebt ?? 0) + (ltDebt ?? 0) - (cash ?? 0);
 
-  // ---------- Değerleme (önce D.VAL.*; yoksa kesin fallback formülleri) ----------
-  const pe =
-    dashNum("D.VAL.PE", "F/K") ??
-    (marketCap != null && ttmNI ? marketCap / ttmNI : null);
+  const dashPE        = dashNum("Dash31", "F/K");
+const dashPB        = dashNum("Dash32", "PD/DD");
+const dashEVSales   = dashNum("Dash33", "FD/Satışlar", "FD/Satış");
+const dashEVEBITDA  = dashNum("Dash34", "FD/FAVÖK");
+const dashND_EBITDA = dashNum("Dash35", "Net Borç/FAVÖK");
 
-  const pb =
-    dashNum("D.VAL.PB", "PD/DD") ??
-    (marketCap != null && equity != null && equity !== 0 ? marketCap / equity : null);
+// Fallback'ler: DASH boşsa eski mantığa dön
+const pe =
+  dashPE ??
+  (marketCap != null && ttmNI ? marketCap / ttmNI : null);
 
-  const ps =
-    dashNum("D.VAL.PS", "Fiyat/Satış", "FD/Satış") ??
-    (marketCap != null && ttmSales ? marketCap / ttmSales : null);
+const pb =
+  dashPB ??
+  (marketCap != null && equity != null && equity !== 0 ? marketCap / equity : null);
 
-  const evEbitda =
-    dashNum("D.VAL.EVEBITDA", "FD/FAVÖK") ??
-    (marketCap != null && ttmEBITDA != null && ttmEBITDA !== 0
-      ? (marketCap + (netDebt ?? 0)) / ttmEBITDA
-      : null);
+// Not: FD/Satışlar EV/Sales'tır. Eski değişken adı "ps" idi; ama artık EV/Sales kullanıyoruz.
+const evSales =
+  dashEVSales ??
+  (marketCap != null && ttmSales
+    ? (marketCap + ((stDebt ?? 0) + (ltDebt ?? 0) - (cash ?? 0))) / ttmSales
+    : null);
 
-  const ndEbitda =
-    dashNum("D.VAL.NETDEBT_EBITDA", "Net Borç/FAVÖK") ??
-    (ttmEBITDA ? (netDebt ?? 0) / ttmEBITDA : null);
+const evEbitda =
+  dashEVEBITDA ??
+  (ttmEBITDA != null && ttmEBITDA !== 0
+    ? ((marketCap ?? 0) + ((stDebt ?? 0) + (ltDebt ?? 0) - (cash ?? 0))) / ttmEBITDA
+    : null);
+
+const ndEbitda =
+  dashND_EBITDA ??
+  (ttmEBITDA ? ((stDebt ?? 0) + (ltDebt ?? 0) - (cash ?? 0)) / ttmEBITDA : null);
 
   // ---------- KAP exact (ad, sektör, adres, web) ----------
   const companyName =
@@ -408,12 +417,13 @@ export default async function CompanyPage({ params }: { params: { ticker: string
       website,
     },
     valuationRatios: {
-      pe,
-      pb,
-      ps,
-      evEbitda,
-      netDebtEbitda: ndEbitda,
-    },
+  pe,
+  pb,
+  evSales,       // (eski ps yerine)
+  evEbitda,
+  netDebtEbitda: ndEbitda,
+},
+
     balanceSheet: {
       assets: assetsArr,
       liabilities: liabArr,
