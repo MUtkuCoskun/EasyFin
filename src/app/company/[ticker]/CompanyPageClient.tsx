@@ -10,12 +10,6 @@ import {
 } from "react-icons/fi";
 import { Treemap, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, PieChart, Pie } from "recharts";
 
-// === 3D (WebGL) ===
-import { Canvas } from "@react-three/fiber";
-import { OrbitControls, Environment, Html } from "@react-three/drei";
-import { EffectComposer, Bloom, Vignette } from "@react-three/postprocessing";
-import * as THREE from "three";
-
 type PageData = {
   ticker: string;
   generalInfo: any;
@@ -33,177 +27,296 @@ function fmtMoney(n: number | null | undefined) {
 }
 
 /* ================================
-   Fütüristik 3D Değerleme Göstergeleri
+   Ultra Modern Valuation Indicators
    ================================ */
 
-// Tamamen Türkçe başlıklar + Fiyat/Satış (ps)
 const METRICS = [
-  { key: "pe",            baslik: "F/K",             ipucu: "Son 12 ay",                      min: 0,  max: 40 },
-  { key: "pb",            baslik: "PD/DD",           ipucu: "Piyasa/Defter",                  min: 0,  max: 8  },
-  { key: "ps",            baslik: "Fiyat/Satış",     ipucu: "Satış çarpanı",                  min: 0,  max: 12 },
-  { key: "evEbitda",      baslik: "FD/FAVÖK",        ipucu: "Firma Değeri/FAVÖK",             min: 0,  max: 25 },
-  { key: "netDebtEbitda", baslik: "Net Borç/FAVÖK",  ipucu: "Kaldıraç",                       min: -2, max: 8  },
+  { 
+    key: "pe", 
+    baslik: "F/K", 
+    ipucu: "Son 12 ay", 
+    min: 0, 
+    max: 40,
+    gradient: "from-cyan-400 via-blue-500 to-purple-600",
+    shadowColor: "rgba(14, 165, 233, 0.4)"
+  },
+  { 
+    key: "pb", 
+    baslik: "PD/DD", 
+    ipucu: "Piyasa/Defter", 
+    min: 0, 
+    max: 8,
+    gradient: "from-emerald-400 via-teal-500 to-cyan-600",
+    shadowColor: "rgba(16, 185, 129, 0.4)"
+  },
+  { 
+    key: "ps", 
+    baslik: "Fiyat/Satış", 
+    ipucu: "Satış çarpanı", 
+    min: 0, 
+    max: 12,
+    gradient: "from-purple-400 via-pink-500 to-rose-600",
+    shadowColor: "rgba(168, 85, 247, 0.4)"
+  },
+  { 
+    key: "evEbitda", 
+    baslik: "FD/FAVÖK", 
+    ipucu: "Firma Değeri/FAVÖK", 
+    min: 0, 
+    max: 25,
+    gradient: "from-orange-400 via-red-500 to-pink-600",
+    shadowColor: "rgba(249, 115, 22, 0.4)"
+  },
+  { 
+    key: "netDebtEbitda", 
+    baslik: "Net Borç/FAVÖK", 
+    ipucu: "Kaldıraç", 
+    min: -2, 
+    max: 8,
+    gradient: "from-indigo-400 via-purple-500 to-fuchsia-600",
+    shadowColor: "rgba(99, 102, 241, 0.4)"
+  },
 ] as const;
 
 function clamp(v: number, min: number, max: number) {
   return Math.max(min, Math.min(max, v));
 }
 
-function renkGradyanDegeri(k: string, v: number) {
-  // Orana göre neon renk geçişleri
-  const x = Math.max(0, Math.min(1, v));
-  const c1 = new THREE.Color("#22d3ee"); // camgöbeği
-  const c2 = new THREE.Color("#60a5fa"); // mavi
-  const c3 = new THREE.Color("#a78bfa"); // mor
-  const c4 = new THREE.Color("#f472b6"); // pembe
-  const c5 = new THREE.Color("#10b981"); // yeşil
-  const out = new THREE.Color();
-  if (k === "netDebtEbitda") {
-    // düşük kaldıraç = yeşil -> mavi -> pembe
-    if (x < 0.33) out.lerpColors(c5, c2, x / 0.33);
-    else if (x < 0.66) out.lerpColors(c2, c3, (x - 0.33) / 0.33);
-    else out.lerpColors(c3, c4, (x - 0.66) / 0.34);
-  } else {
-    // diğerleri = camgöbeği -> mavi -> mor
-    if (x < 0.5) out.lerpColors(c1, c2, x / 0.5);
-    else out.lerpColors(c2, c3, (x - 0.5) / 0.5);
-  }
-  return out.getStyle();
-}
-
-// --- Donut3D: motion.mesh yerine normal mesh + spring -> state ---
-function Donut3D({
-  oran, min, max, baslik, ipucu, renkAnahtari
+function ModernRatioCard({
+  oran, min, max, baslik, ipucu, gradient, shadowColor
 }: {
   oran: number | null;
   min: number;
   max: number;
   baslik: string;
   ipucu: string;
-  renkAnahtari: string;
+  gradient: string;
+  shadowColor: string;
 }) {
-  const hedefYuzde = useMemo(() => {
+  const [isHovered, setIsHovered] = useState(false);
+  const [mousePos, setMousePos] = useState({ x: 0.5, y: 0.5 });
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  const percentage = useMemo(() => {
     if (oran == null || !isFinite(oran)) return 0;
-    return clamp((oran - min) / (max - min), 0, 1);
+    return clamp((oran - min) / (max - min), 0, 1) * 100;
   }, [oran, min, max]);
 
-  // framer spring
-  const mv = useMotionValue(hedefYuzde);
-  const p = useSpring(mv, { stiffness: 150, damping: 18, mass: 0.7 });
-  useEffect(() => { mv.set(hedefYuzde); }, [hedefYuzde, mv]);
+  const animatedPercentage = useMotionValue(0);
+  const animatedValue = useMotionValue(0);
+  
+  const springConfig = { stiffness: 100, damping: 20, mass: 1.2 };
+  const animPercentage = useSpring(animatedPercentage, springConfig);
+  const animValue = useSpring(animatedValue, springConfig);
 
-  // spring → local state (Canvas yeniden render alsın diye)
-  const [prog, setProg] = useState<number>(hedefYuzde);
-  useMotionValueEvent(p, "change", (v) => setProg(v));
+  useEffect(() => {
+    animatedPercentage.set(percentage);
+    animatedValue.set(oran ?? 0);
+  }, [percentage, oran, animatedPercentage, animatedValue]);
 
-  // sayı animasyonu (UI metni)
-  const sayiMv = useMotionValue(oran ?? 0);
-  const sayi = useSpring(sayiMv, { stiffness: 120, damping: 12 });
-  useEffect(() => { sayiMv.set(oran ?? 0); }, [oran, sayiMv]);
-
-  const kartRef = useRef<HTMLDivElement>(null);
-  const [hover, setHover] = useState(false);
-  const [pt, setPt] = useState({ x: 0.5, y: 0.5 });
-  const onMove = (e: React.MouseEvent) => {
-    const r = kartRef.current?.getBoundingClientRect();
-    if (!r) return;
-    setPt({ x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height });
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!cardRef.current) return;
+    const rect = cardRef.current.getBoundingClientRect();
+    setMousePos({
+      x: (e.clientX - rect.left) / rect.width,
+      y: (e.clientY - rect.top) / rect.height,
+    });
   };
 
-  const renk = useMemo(() => renkGradyanDegeri(renkAnahtari, prog), [prog, renkAnahtari]);
-  const degerStr = oran == null || !isFinite(oran) ? "–" : oran >= 10 ? oran.toFixed(0) : oran.toFixed(1);
+  const displayValue = oran == null || !isFinite(oran) 
+    ? "–" 
+    : oran >= 10 
+      ? oran.toFixed(0) 
+      : oran.toFixed(1);
 
   return (
-    <div
-      ref={kartRef}
-      className="relative rounded-2xl p-4 bg-gray-900/70 border border-cyan-900/30"
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      onMouseMove={onMove}
-      style={{ transformStyle: "preserve-3d" }}
+    <motion.div
+      ref={cardRef}
+      className="group relative overflow-hidden"
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+      onMouseMove={handleMouseMove}
+      whileHover={{ scale: 1.02 }}
+      transition={{ type: "spring", stiffness: 300, damping: 30 }}
     >
+      {/* Glassmorphism Container */}
       <motion.div
-        animate={{
-          rotateX: hover ? (0.5 - pt.y) * 8 : 0,
-          rotateY: hover ? (pt.x - 0.5) * 10 : 0,
-          boxShadow: hover ? "0 0 120px -30px rgba(34,211,238,.6)" : "0 0 40px -20px rgba(34,211,238,.35)",
+        className="relative h-[280px] backdrop-blur-xl bg-white/[0.08] border border-white/[0.12] rounded-3xl overflow-hidden"
+        style={{
+          background: isHovered 
+            ? `linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.05) 100%)`
+            : `linear-gradient(135deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 100%)`,
         }}
-        transition={{ type: "spring", stiffness: 120, damping: 14 }}
-        className="rounded-xl"
+        animate={{
+          rotateX: isHovered ? (0.5 - mousePos.y) * 8 : 0,
+          rotateY: isHovered ? (mousePos.x - 0.5) * 8 : 0,
+          boxShadow: isHovered 
+            ? `0 20px 60px -12px ${shadowColor}, 0 0 0 1px rgba(255,255,255,0.1)`
+            : `0 8px 32px -8px ${shadowColor.replace('0.4', '0.2')}, 0 0 0 1px rgba(255,255,255,0.05)`,
+        }}
+        transition={{ type: "spring", stiffness: 200, damping: 25 }}
       >
-        <div className="h-[220px] w-full">
-          <Canvas dpr={[1, 2]} camera={{ fov: 35, position: [0, 0, 4.5] }}>
-            <ambientLight intensity={0.3} />
-            <pointLight position={[2, 3, 2]} intensity={1.2} color={renk} />
-            <pointLight position={[-3, -2, 1]} intensity={0.6} color="#0ea5e9" />
+        {/* Animated Gradient Background */}
+        <motion.div
+          className={`absolute inset-0 bg-gradient-to-br ${gradient} opacity-0`}
+          animate={{ opacity: isHovered ? 0.1 : 0.05 }}
+          transition={{ duration: 0.6 }}
+        />
 
-            {/* arka plan halka */}
-            <mesh rotation={[-Math.PI / 2, 0, 0]}>
-              <torusGeometry args={[1.2, 0.16, 64, 256, Math.PI * 2]} />
-              <meshStandardMaterial color="#0b1220" metalness={0.2} roughness={0.9} />
-            </mesh>
-
-            {/* oran halesi */}
-            <mesh rotation={[-Math.PI / 2, 0, 0]}>
-              <torusGeometry args={[1.2, 0.16, 64, 256, Math.PI * 2 * prog]} />
-              <meshStandardMaterial
-                color={renk}
-                emissive={new THREE.Color(renk)}
-                emissiveIntensity={2.2}
-                metalness={0.7}
-                roughness={0.25}
-              />
-            </mesh>
-
-            {/* iç parıltı */}
-            <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, -0.02]}>
-              <torusGeometry args={[0.92, 0.06, 32, 128, Math.PI * 2]} />
-              <meshStandardMaterial color="#0b1220" emissive={renk} emissiveIntensity={0.6} metalness={0.1} roughness={1} />
-            </mesh>
-
-            <Environment preset="city" />
-            <EffectComposer>
-              <Bloom intensity={1.2} luminanceThreshold={0.2} luminanceSmoothing={0.6} />
-              <Vignette eskil={false} offset={0.25} darkness={0.5} />
-            </EffectComposer>
-
-            {/* merkez bilgi */}
-            <Html center distanceFactor={8}>
-              <div className="text-center select-none">
-                <p className="text-gray-400 text-xs">{baslik}</p>
-                <motion.p
-                  className="text-white font-extrabold text-3xl"
-                  animate={{ scale: hover ? 1.06 : 1 }}
-                  transition={{ type: "spring", stiffness: 220, damping: 12 }}
-                >
-                  {degerStr}{oran != null && isFinite(oran) ? "x" : ""}
-                </motion.p>
-                <p className="text-cyan-400/70 text-[11px] mt-1">{ipucu}</p>
-              </div>
-            </Html>
-
-            <OrbitControls enablePan={false} enableZoom={false} rotateSpeed={0.6} />
-          </Canvas>
+        {/* Floating Orbs */}
+        <div className="absolute inset-0 overflow-hidden">
+          <motion.div
+            className={`absolute top-4 right-4 w-16 h-16 bg-gradient-to-br ${gradient} rounded-full blur-xl opacity-30`}
+            animate={{
+              x: isHovered ? mousePos.x * 10 : 0,
+              y: isHovered ? mousePos.y * 10 : 0,
+              scale: isHovered ? 1.2 : 1,
+            }}
+            transition={{ type: "spring", stiffness: 150, damping: 20 }}
+          />
+          <motion.div
+            className={`absolute bottom-6 left-6 w-12 h-12 bg-gradient-to-br ${gradient} rounded-full blur-lg opacity-20`}
+            animate={{
+              x: isHovered ? -mousePos.x * 8 : 0,
+              y: isHovered ? -mousePos.y * 8 : 0,
+              scale: isHovered ? 1.3 : 1,
+            }}
+            transition={{ type: "spring", stiffness: 180, damping: 25 }}
+          />
         </div>
+
+        {/* Content */}
+        <div className="relative z-10 h-full flex flex-col justify-between p-6">
+          {/* Header */}
+          <div className="text-center">
+            <motion.h3 
+              className="text-sm font-medium text-white/60 mb-1"
+              animate={{ y: isHovered ? -2 : 0 }}
+              transition={{ type: "spring", stiffness: 300, damping: 30 }}
+            >
+              {baslik}
+            </motion.h3>
+            <motion.p 
+              className="text-xs text-white/40"
+              animate={{ opacity: isHovered ? 0.8 : 0.6 }}
+              transition={{ duration: 0.3 }}
+            >
+              {ipucu}
+            </motion.p>
+          </div>
+
+          {/* Circular Progress */}
+          <div className="flex-1 flex items-center justify-center">
+            <div className="relative">
+              {/* Background Ring */}
+              <svg width="140" height="140" className="transform -rotate-90">
+                <circle
+                  cx="70"
+                  cy="70"
+                  r="60"
+                  stroke="rgba(255,255,255,0.1)"
+                  strokeWidth="8"
+                  fill="none"
+                  strokeLinecap="round"
+                />
+                {/* Progress Ring */}
+                <motion.circle
+                  cx="70"
+                  cy="70"
+                  r="60"
+                  stroke={`url(#gradient-${baslik})`}
+                  strokeWidth="8"
+                  fill="none"
+                  strokeLinecap="round"
+                  strokeDasharray={`${2 * Math.PI * 60}`}
+                  initial={{ strokeDashoffset: `${2 * Math.PI * 60}` }}
+                  animate={{ 
+                    strokeDashoffset: `${2 * Math.PI * 60 * (1 - percentage / 100)}`,
+                    filter: isHovered ? "drop-shadow(0 0 8px rgba(255,255,255,0.4))" : "none"
+                  }}
+                  transition={{ duration: 1.5, ease: "easeOut" }}
+                />
+                
+                {/* Gradient Definition */}
+                <defs>
+                  <linearGradient id={`gradient-${baslik}`} x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stopColor="rgba(255,255,255,0.9)" />
+                    <stop offset="50%" stopColor="rgba(255,255,255,0.6)" />
+                    <stop offset="100%" stopColor="rgba(255,255,255,0.3)" />
+                  </linearGradient>
+                </defs>
+              </svg>
+
+              {/* Center Value */}
+              <div className="absolute inset-0 flex flex-col items-center justify-center">
+                <motion.div
+                  className="text-3xl font-black text-white"
+                  animate={{ 
+                    scale: isHovered ? 1.1 : 1,
+                    textShadow: isHovered ? "0 0 20px rgba(255,255,255,0.5)" : "none"
+                  }}
+                  transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                >
+                  {displayValue}
+                  {oran != null && isFinite(oran) && (
+                    <span className="text-lg font-normal text-white/70">x</span>
+                  )}
+                </motion.div>
+                <motion.div
+                  className="text-xs text-white/50 mt-1"
+                  animate={{ opacity: isHovered ? 0.8 : 0.5 }}
+                  transition={{ duration: 0.3 }}
+                >
+                  {Math.round(percentage)}%
+                </motion.div>
+              </div>
+            </div>
+          </div>
+
+          {/* Status Indicator */}
+          <div className="flex items-center justify-center">
+            <motion.div
+              className={`w-2 h-2 rounded-full bg-gradient-to-r ${gradient}`}
+              animate={{
+                scale: isHovered ? [1, 1.3, 1] : 1,
+                boxShadow: isHovered ? `0 0 12px 2px ${shadowColor}` : `0 0 6px 1px ${shadowColor}`
+              }}
+              transition={{ 
+                scale: { repeat: isHovered ? Infinity : 0, duration: 1.5 },
+                boxShadow: { duration: 0.3 }
+              }}
+            />
+          </div>
+        </div>
+
+        {/* Hover Overlay */}
+        <motion.div
+          className="absolute inset-0 bg-gradient-to-br from-white/[0.08] to-transparent pointer-events-none"
+          animate={{ opacity: isHovered ? 1 : 0 }}
+          transition={{ duration: 0.3 }}
+        />
       </motion.div>
-    </div>
+    </motion.div>
   );
 }
 
 function DegerlemePanel3D({ ratios }: { ratios: any }) {
   return (
-    <div className="mt-6 grid grid-cols-1 xs:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-5">
-      {METRICS.map(m => (
-        <Donut3D
-          key={m.key}
-          oran={ratios?.[m.key] ?? null}
-          min={m.min}
-          max={m.max}
-          baslik={m.baslik}
-          ipucu={m.ipucu}
-          renkAnahtari={String(m.key)}
-        />
-      ))}
+    <div className="mt-8">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
+        {METRICS.map(m => (
+          <ModernRatioCard
+            key={m.key}
+            oran={ratios?.[m.key] ?? null}
+            min={m.min}
+            max={m.max}
+            baslik={m.baslik}
+            ipucu={m.ipucu}
+            gradient={m.gradient}
+            shadowColor={m.shadowColor}
+          />
+        ))}
+      </div>
     </div>
   );
 }
@@ -258,7 +371,7 @@ export default function CompanyPageClient({ data }: { data: PageData }) {
           </div>
         </AnimatedSection>
 
-        {/* DEĞERLEME – 3D */}
+        {/* DEĞERLEME – MODERN */}
         <AnimatedSection id="degerleme" setActive={setActiveSection}>
           <SectionHeader title="Finansal Değerleme" subtitle="Şirket çarpanları ve rasyolar" />
           <DegerlemePanel3D ratios={valuationRatios} />
