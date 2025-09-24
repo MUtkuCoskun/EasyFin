@@ -39,7 +39,7 @@ const METRICS = [
     max: 40,
     gradient: "from-cyan-400 via-blue-500 to-purple-600",
     shadowColor: "rgba(14, 165, 233, 0.4)",
-    benchmark: "S&P 500: 18-22x"
+    dataLabel: "HBK - Net Kar"
   },
   { 
     key: "pb", 
@@ -49,7 +49,7 @@ const METRICS = [
     max: 8,
     gradient: "from-emerald-400 via-teal-500 to-cyan-600",
     shadowColor: "rgba(16, 185, 129, 0.4)",
-    benchmark: "BIST 100: 1.2x"
+    dataLabel: "Piyasa Değeri - Defter Değeri"
   },
   { 
     key: "ps", 
@@ -59,7 +59,7 @@ const METRICS = [
     max: 12,
     gradient: "from-purple-400 via-pink-500 to-rose-600",
     shadowColor: "rgba(168, 85, 247, 0.4)",
-    benchmark: "Sektör Ort: 2.1x"
+    dataLabel: "Piyasa Değeri - Satışlar"
   },
   { 
     key: "evEbitda", 
@@ -69,7 +69,7 @@ const METRICS = [
     max: 25,
     gradient: "from-orange-400 via-red-500 to-pink-600",
     shadowColor: "rgba(249, 115, 22, 0.4)",
-    benchmark: "Global Ort: 12x"
+    dataLabel: "Firma Değeri - FAVÖK"
   },
   { 
     key: "netDebtEbitda", 
@@ -79,7 +79,7 @@ const METRICS = [
     max: 8,
     gradient: "from-indigo-400 via-purple-500 to-fuchsia-600",
     shadowColor: "rgba(99, 102, 241, 0.4)",
-    benchmark: "Güvenli: <3x"
+    dataLabel: "Net Borç - FAVÖK"
   },
 ] as const;
 
@@ -88,7 +88,7 @@ function clamp(v: number, min: number, max: number) {
 }
 
 function ModernRatioCard({
-  oran, min, max, baslik, ipucu, gradient, shadowColor, benchmark
+  oran, min, max, baslik, ipucu, gradient, shadowColor, dataLabel
 }: {
   oran: number | null;
   min: number;
@@ -97,7 +97,7 @@ function ModernRatioCard({
   ipucu: string;
   gradient: string;
   shadowColor: string;
-  benchmark: string;
+  dataLabel: string;
 }) {
   const [isHovered, setIsHovered] = useState(false);
   const [mousePos, setMousePos] = useState({ x: 0.5, y: 0.5 });
@@ -111,7 +111,7 @@ function ModernRatioCard({
   const animatedPercentage = useMotionValue(0);
   const animatedValue = useMotionValue(0);
   
-  const springConfig = { stiffness: 100, damping: 20, mass: 1.2 };
+  const springConfig = { stiffness: 80, damping: 25, mass: 1.0 };
   const animPercentage = useSpring(animatedPercentage, springConfig);
   const animValue = useSpring(animatedValue, springConfig);
 
@@ -150,47 +150,59 @@ function ModernRatioCard({
         className="relative h-[280px] backdrop-blur-xl bg-white/[0.08] border border-white/[0.12] rounded-3xl overflow-hidden"
         style={{
           background: isHovered 
-            ? `linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.05) 100%)`
-            : `linear-gradient(135deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 100%)`,
+            ? `linear-gradient(135deg, rgba(255,255,255,0.12) 0%, rgba(255,255,255,0.06) 100%)`
+            : `linear-gradient(135deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.03) 100%)`,
         }}
         animate={{
           rotateX: isHovered ? (0.5 - mousePos.y) * 8 : 0,
           rotateY: isHovered ? (mousePos.x - 0.5) * 8 : 0,
           boxShadow: isHovered 
-            ? `0 20px 60px -12px ${shadowColor}, 0 0 0 1px rgba(255,255,255,0.1)`
-            : `0 8px 32px -8px ${shadowColor.replace('0.4', '0.2')}, 0 0 0 1px rgba(255,255,255,0.05)`,
+            ? `0 20px 60px -12px ${shadowColor}, 0 0 0 1px rgba(255,255,255,0.15)`
+            : `0 8px 32px -8px ${shadowColor.replace('0.4', '0.25')}, 0 0 0 1px rgba(255,255,255,0.08)`,
         }}
         transition={{ type: "spring", stiffness: 200, damping: 25 }}
       >
-        {/* Smooth Animated Gradient Background */}
+        {/* Smooth Multi-Stop Gradient Background */}
         <motion.div
           className={`absolute inset-0 bg-gradient-to-br ${gradient}`}
-          animate={{ 
-            opacity: isHovered ? 0.15 : 0.08,
-            scale: isHovered ? 1.05 : 1
+          style={{
+            background: `linear-gradient(135deg, 
+              rgba(6, 182, 212, 0.1) 0%,
+              rgba(34, 211, 238, 0.08) 20%,
+              rgba(59, 130, 246, 0.06) 40%,
+              rgba(99, 102, 241, 0.08) 60%,
+              rgba(139, 92, 246, 0.1) 80%,
+              rgba(168, 85, 247, 0.12) 100%
+            )`
           }}
-          transition={{ duration: 0.8, ease: "easeInOut" }}
+          animate={{ 
+            opacity: isHovered ? 0.2 : 0.1,
+            scale: isHovered ? 1.02 : 1
+          }}
+          transition={{ duration: 1.2, ease: [0.25, 0.46, 0.45, 0.94] }}
         />
 
         {/* Floating Orbs */}
         <div className="absolute inset-0 overflow-hidden">
           <motion.div
-            className={`absolute top-4 right-4 w-16 h-16 bg-gradient-to-br ${gradient} rounded-full blur-xl opacity-30`}
+            className={`absolute top-4 right-4 w-16 h-16 bg-gradient-to-br ${gradient} rounded-full blur-xl opacity-25`}
             animate={{
-              x: isHovered ? mousePos.x * 10 : 0,
-              y: isHovered ? mousePos.y * 10 : 0,
-              scale: isHovered ? 1.2 : 1,
+              x: isHovered ? mousePos.x * 12 : 0,
+              y: isHovered ? mousePos.y * 12 : 0,
+              scale: isHovered ? 1.3 : 1,
+              opacity: isHovered ? 0.35 : 0.25,
             }}
-            transition={{ type: "spring", stiffness: 150, damping: 20 }}
+            transition={{ type: "spring", stiffness: 120, damping: 20 }}
           />
           <motion.div
-            className={`absolute bottom-6 left-6 w-12 h-12 bg-gradient-to-br ${gradient} rounded-full blur-lg opacity-20`}
+            className={`absolute bottom-6 left-6 w-12 h-12 bg-gradient-to-br ${gradient} rounded-full blur-lg opacity-15`}
             animate={{
-              x: isHovered ? -mousePos.x * 8 : 0,
-              y: isHovered ? -mousePos.y * 8 : 0,
-              scale: isHovered ? 1.3 : 1,
+              x: isHovered ? -mousePos.x * 10 : 0,
+              y: isHovered ? -mousePos.y * 10 : 0,
+              scale: isHovered ? 1.4 : 1,
+              opacity: isHovered ? 0.25 : 0.15,
             }}
-            transition={{ type: "spring", stiffness: 180, damping: 25 }}
+            transition={{ type: "spring", stiffness: 150, damping: 25 }}
           />
         </div>
 
@@ -199,15 +211,21 @@ function ModernRatioCard({
           {/* Header */}
           <div className="text-center">
             <motion.h3 
-              className="text-sm font-bold text-white/90 mb-1"
-              animate={{ y: isHovered ? -2 : 0 }}
+              className="text-sm font-black text-white mb-1"
+              animate={{ 
+                y: isHovered ? -2 : 0,
+                textShadow: isHovered ? "0 0 15px rgba(255,255,255,0.3)" : "0 0 8px rgba(255,255,255,0.1)"
+              }}
               transition={{ type: "spring", stiffness: 300, damping: 30 }}
             >
               {baslik}
             </motion.h3>
             <motion.p 
-              className="text-xs font-medium text-white/60"
-              animate={{ opacity: isHovered ? 0.8 : 0.7 }}
+              className="text-xs font-semibold text-white/85"
+              animate={{ 
+                opacity: isHovered ? 0.95 : 0.85,
+                textShadow: isHovered ? "0 0 10px rgba(255,255,255,0.2)" : "none"
+              }}
               transition={{ duration: 0.3 }}
             >
               {ipucu}
@@ -223,7 +241,7 @@ function ModernRatioCard({
                   cx="70"
                   cy="70"
                   r="60"
-                  stroke="rgba(255,255,255,0.15)"
+                  stroke="rgba(255,255,255,0.2)"
                   strokeWidth="8"
                   fill="none"
                   strokeLinecap="round"
@@ -241,17 +259,20 @@ function ModernRatioCard({
                   initial={{ strokeDashoffset: `${2 * Math.PI * 60}` }}
                   animate={{ 
                     strokeDashoffset: `${2 * Math.PI * 60 * (1 - percentage / 100)}`,
-                    filter: isHovered ? "drop-shadow(0 0 12px rgba(255,255,255,0.6))" : "drop-shadow(0 0 4px rgba(255,255,255,0.2))"
+                    filter: isHovered 
+                      ? "drop-shadow(0 0 15px rgba(255,255,255,0.8))" 
+                      : "drop-shadow(0 0 6px rgba(255,255,255,0.4))"
                   }}
-                  transition={{ duration: 1.5, ease: "easeOut" }}
+                  transition={{ duration: 2.0, ease: [0.25, 0.46, 0.45, 0.94] }}
                 />
                 
-                {/* Gradient Definition */}
+                {/* Enhanced Gradient Definition */}
                 <defs>
                   <linearGradient id={`gradient-${baslik}`} x1="0%" y1="0%" x2="100%" y2="100%">
-                    <stop offset="0%" stopColor="rgba(255,255,255,0.95)" />
-                    <stop offset="50%" stopColor="rgba(255,255,255,0.8)" />
-                    <stop offset="100%" stopColor="rgba(255,255,255,0.6)" />
+                    <stop offset="0%" stopColor="rgba(255,255,255,1.0)" />
+                    <stop offset="30%" stopColor="rgba(255,255,255,0.9)" />
+                    <stop offset="60%" stopColor="rgba(255,255,255,0.8)" />
+                    <stop offset="100%" stopColor="rgba(255,255,255,0.7)" />
                   </linearGradient>
                 </defs>
               </svg>
@@ -260,20 +281,27 @@ function ModernRatioCard({
               <div className="absolute inset-0 flex flex-col items-center justify-center">
                 <motion.div
                   className="text-3xl font-black text-white"
+                  style={{
+                    textShadow: isHovered 
+                      ? "0 0 25px rgba(255,255,255,0.6), 0 0 10px rgba(255,255,255,0.4)" 
+                      : "0 0 12px rgba(255,255,255,0.3)"
+                  }}
                   animate={{ 
-                    scale: isHovered ? 1.1 : 1,
-                    textShadow: isHovered ? "0 0 20px rgba(255,255,255,0.5)" : "0 0 8px rgba(255,255,255,0.2)"
+                    scale: isHovered ? 1.12 : 1,
                   }}
                   transition={{ type: "spring", stiffness: 300, damping: 30 }}
                 >
                   {displayValue}
                   {oran != null && isFinite(oran) && (
-                    <span className="text-lg font-bold text-white/80">x</span>
+                    <span className="text-lg font-black text-white">x</span>
                   )}
                 </motion.div>
                 <motion.div
-                  className="text-xs font-semibold text-white/70 mt-1"
-                  animate={{ opacity: isHovered ? 0.9 : 0.7 }}
+                  className="text-xs font-bold text-white/90 mt-1"
+                  style={{
+                    textShadow: isHovered ? "0 0 8px rgba(255,255,255,0.3)" : "none"
+                  }}
+                  animate={{ opacity: isHovered ? 1 : 0.9 }}
                   transition={{ duration: 0.3 }}
                 >
                   {Math.round(percentage)}%
@@ -282,23 +310,26 @@ function ModernRatioCard({
             </div>
           </div>
 
-          {/* Benchmark Text */}
+          {/* Data Labels */}
           <div className="flex items-center justify-center">
             <motion.p
-              className="text-xs font-medium text-white/50 text-center"
-              animate={{ opacity: isHovered ? 0.8 : 0.6 }}
+              className="text-xs font-bold text-white/95 text-center leading-tight"
+              style={{
+                textShadow: isHovered ? "0 0 8px rgba(255,255,255,0.3)" : "none"
+              }}
+              animate={{ opacity: isHovered ? 1 : 0.9 }}
               transition={{ duration: 0.3 }}
             >
-              {benchmark}
+              {dataLabel}
             </motion.p>
           </div>
         </div>
 
         {/* Hover Overlay */}
         <motion.div
-          className="absolute inset-0 bg-gradient-to-br from-white/[0.08] to-transparent pointer-events-none"
+          className="absolute inset-0 bg-gradient-to-br from-white/[0.1] to-transparent pointer-events-none"
           animate={{ opacity: isHovered ? 1 : 0 }}
-          transition={{ duration: 0.3 }}
+          transition={{ duration: 0.4 }}
         />
       </motion.div>
     </motion.div>
@@ -319,13 +350,17 @@ function DegerlemePanel3D({ ratios }: { ratios: any }) {
             ipucu={m.ipucu}
             gradient={m.gradient}
             shadowColor={m.shadowColor}
-            benchmark={m.benchmark}
+            dataLabel={m.dataLabel}
           />
         ))}
       </div>
     </div>
   );
 }
+
+/* ================================
+   Sayfanın geri kalanı
+   ================================ */
 
 export default function CompanyPageClient({ data }: { data: PageData }) {
   const { ticker, generalInfo, valuationRatios, balanceSheet, incomeStatement, cashFlow, ownership, management } = data;
