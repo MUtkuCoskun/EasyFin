@@ -296,32 +296,13 @@ function ModernRatioCard({
                     <span className="text-lg font-black text-white">x</span>
                   )}
                 </motion.div>
-                <motion.div
-                  className="text-xs font-bold text-white/90 mt-1"
-                  style={{
-                    textShadow: isHovered ? "0 0 8px rgba(255,255,255,0.3)" : "none"
-                  }}
-                  animate={{ opacity: isHovered ? 1 : 0.9 }}
-                  transition={{ duration: 0.3 }}
-                >
-                  {Math.round(percentage)}%
-                </motion.div>
               </div>
             </div>
           </div>
 
-          {/* Data Labels */}
-          <div className="flex items-center justify-center">
-            <motion.p
-              className="text-xs font-bold text-white/95 text-center leading-tight"
-              style={{
-                textShadow: isHovered ? "0 0 8px rgba(255,255,255,0.3)" : "none"
-              }}
-              animate={{ opacity: isHovered ? 1 : 0.9 }}
-              transition={{ duration: 0.3 }}
-            >
-              {dataLabel}
-            </motion.p>
+          {/* Data Labels - Empty Space */}
+          <div className="flex items-center justify-center h-8">
+            {/* Empty space where labels used to be */}
           </div>
         </div>
 
