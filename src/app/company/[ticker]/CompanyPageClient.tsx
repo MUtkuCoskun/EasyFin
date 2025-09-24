@@ -503,16 +503,23 @@ function BalanceSheetTreemap({ title, data }: { title: string; data: any[]; }) {
 
   return (
     <motion.div 
-      className="relative w-full h-full"
+      className="bg-gray-800/40 backdrop-blur-sm p-6 rounded-2xl border border-gray-700/30 w-full h-full flex flex-col relative overflow-hidden"
       initial={{ opacity: 0, y: 20 }}
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true }}
       transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
     >
+      {/* Subtle background gradient */}
+      <motion.div
+        className="absolute inset-0 bg-gradient-to-br from-white/[0.03] to-transparent rounded-2xl"
+        animate={{ opacity: hoveredCard !== null ? 0.8 : 0.5 }}
+        transition={{ duration: 0.3 }}
+      />
+
       <motion.h3 
-        className="text-xl font-bold text-white mb-6"
+        className="text-lg font-bold text-white mb-4 relative z-10"
         animate={{ 
-          x: hoveredCard !== null ? 8 : 0,
+          x: hoveredCard !== null ? 4 : 0,
           color: hoveredCard !== null ? "#22d3ee" : "#ffffff"
         }}
         transition={{ type: "spring", stiffness: 300, damping: 25 }}
@@ -520,7 +527,7 @@ function BalanceSheetTreemap({ title, data }: { title: string; data: any[]; }) {
         {title}
       </motion.h3>
       
-      <div className="grid gap-3 h-[400px]">
+      <div className="flex-1 flex flex-col gap-3 relative z-10">
         {data.map((item, index) => (
           <ModernBalanceCard
             key={item.name}
@@ -528,6 +535,7 @@ function BalanceSheetTreemap({ title, data }: { title: string; data: any[]; }) {
             index={index}
             isHovered={hoveredCard === index}
             onHover={setHoveredCard}
+            totalItems={data.length}
           />
         ))}
       </div>
@@ -539,20 +547,20 @@ function ModernBalanceCard({
   item, 
   index, 
   isHovered, 
-  onHover 
+  onHover,
+  totalItems
 }: { 
   item: any; 
   index: number; 
   isHovered: boolean; 
   onHover: (index: number | null) => void; 
+  totalItems: number;
 }) {
-  // Calculate relative size for dynamic height
-  const maxValue = Math.max(...[37.9, 41.6, 25.2]); // rough max from common data
-  const heightRatio = Math.min(item.value / maxValue * 100, 100);
-  const minHeight = 60;
-  const dynamicHeight = Math.max(minHeight, heightRatio * 3);
+  // Calculate flex-grow based on value to create proportional heights
+  const maxValue = Math.max(...[100, 50, 30]); // rough estimation for proportions
+  const flexGrow = Math.max(item.value / maxValue, 0.3); // minimum 0.3 for readability
 
-  // Dynamic colors based on value ranges
+  // Dynamic colors based on index
   const getCardColor = () => {
     const colors = [
       'from-emerald-500 to-teal-600',
@@ -566,18 +574,19 @@ function ModernBalanceCard({
 
   return (
     <motion.div
-      className={`relative overflow-hidden rounded-2xl cursor-pointer bg-gradient-to-r ${getCardColor()}`}
-      style={{ height: `${dynamicHeight}px` }}
+      className={`relative overflow-hidden rounded-xl cursor-pointer bg-gradient-to-r ${getCardColor()}`}
+      style={{ flexGrow }}
       onMouseEnter={() => onHover(index)}
       onMouseLeave={() => onHover(null)}
-      initial={{ scale: 0.9, opacity: 0 }}
+      initial={{ scale: 0.95, opacity: 0, x: -20 }}
       animate={{ 
-        scale: isHovered ? 1.05 : 1,
+        scale: isHovered ? 1.03 : 1,
         opacity: 1,
-        rotateY: isHovered ? 2 : 0,
-        z: isHovered ? 10 : 0
+        x: 0,
+        rotateY: isHovered ? 1 : 0,
+        z: isHovered ? 5 : 0
       }}
-      whileInView={{ scale: 1, opacity: 1 }}
+      whileInView={{ scale: 1, opacity: 1, x: 0 }}
       transition={{ 
         type: "spring", 
         stiffness: 400, 
@@ -585,7 +594,7 @@ function ModernBalanceCard({
         delay: index * 0.1 
       }}
       whileHover={{
-        boxShadow: "0 20px 40px -10px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.1)"
+        boxShadow: "0 10px 25px -5px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.1)"
       }}
     >
       {/* Glossy overlay */}
@@ -601,28 +610,28 @@ function ModernBalanceCard({
         animate={{
           backgroundPosition: isHovered ? "100% 100%" : "0% 0%"
         }}
-        transition={{ duration: 2, ease: "linear" }}
+        transition={{ duration: 1.5, ease: "linear" }}
         style={{
           backgroundImage: "linear-gradient(45deg, transparent 30%, rgba(255,255,255,0.1) 50%, transparent 70%)",
-          backgroundSize: "20px 20px"
+          backgroundSize: "15px 15px"
         }}
       />
 
       {/* Content */}
       <motion.div 
-        className="relative z-10 h-full flex flex-col justify-center px-6"
+        className="relative z-10 h-full flex flex-col justify-center px-4 py-3 min-h-[60px]"
         animate={{
-          y: isHovered ? -2 : 0
+          y: isHovered ? -1 : 0
         }}
         transition={{ type: "spring", stiffness: 300, damping: 20 }}
       >
         <motion.h4 
-          className="text-white font-bold text-lg leading-tight mb-2"
+          className="text-white font-bold text-sm leading-tight mb-1"
           animate={{
-            scale: isHovered ? 1.05 : 1,
+            scale: isHovered ? 1.02 : 1,
             textShadow: isHovered 
-              ? "0 0 20px rgba(255,255,255,0.5)" 
-              : "0 2px 4px rgba(0,0,0,0.3)"
+              ? "0 0 15px rgba(255,255,255,0.4)" 
+              : "0 1px 3px rgba(0,0,0,0.3)"
           }}
           transition={{ duration: 0.2 }}
         >
@@ -630,41 +639,41 @@ function ModernBalanceCard({
         </motion.h4>
         
         <motion.div 
-          className="flex items-baseline gap-2"
+          className="flex items-baseline gap-1"
           animate={{
-            x: isHovered ? 4 : 0
+            x: isHovered ? 2 : 0
           }}
           transition={{ type: "spring", stiffness: 400, damping: 25 }}
         >
-          <span className="text-white/90 font-bold text-2xl">
+          <span className="text-white font-bold text-lg">
             {item.value.toFixed(1)}
           </span>
-          <span className="text-white/70 font-medium text-sm">
+          <span className="text-white/80 font-medium text-xs">
             milyar ₺
           </span>
         </motion.div>
 
         {/* Progress indicator */}
         <motion.div 
-          className="absolute bottom-0 left-0 h-1 bg-white/30 rounded-full"
+          className="absolute bottom-0 left-0 h-0.5 bg-white/30 rounded-full"
           initial={{ width: "0%" }}
           animate={{ 
-            width: isHovered ? "100%" : `${Math.min(heightRatio, 100)}%`
+            width: isHovered ? "100%" : "70%"
           }}
-          transition={{ duration: 0.8, ease: "easeOut" }}
+          transition={{ duration: 0.6, ease: "easeOut" }}
         />
       </motion.div>
 
       {/* Floating accent dot */}
       <motion.div
-        className="absolute top-4 right-4 w-2 h-2 bg-white/60 rounded-full"
+        className="absolute top-2 right-2 w-1.5 h-1.5 bg-white/60 rounded-full"
         animate={{
-          scale: isHovered ? [1, 1.5, 1] : 1,
+          scale: isHovered ? [1, 1.3, 1] : 1,
           opacity: isHovered ? [0.6, 1, 0.6] : 0.6
         }}
         transition={{
-          scale: { duration: 1.5, repeat: Infinity },
-          opacity: { duration: 1.5, repeat: Infinity }
+          scale: { duration: 1.2, repeat: Infinity },
+          opacity: { duration: 1.2, repeat: Infinity }
         }}
       />
     </motion.div>
