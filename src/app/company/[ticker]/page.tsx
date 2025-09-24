@@ -342,7 +342,7 @@ export default async function CompanyPage({ params }: { params: { ticker: string
   // Not: Kodlar projedeki yeni mapping: Dash31..Dash35. Eski exportlarda Dash25 olabilir (F/K).
   const pe        = dashLatest(dashRows, "Dash25", "F/K");
   const pb        = dashLatest(dashRows, "Dash26", "PD/DD");
-  const evSales   = dashLatest(dashRows, "Dash27", "FD/Satışlar", "FD/Satış");
+  const ps   = dashLatest(dashRows, "Dash27", "FD/Satışlar", "FD/Satış");
   const evEbitda  = dashLatest(dashRows, "Dash28", "FD/FAVÖK");
   const ndEbitda  = dashLatest(dashRows, "Dash29", "Net Borç/FAVÖK");
 
@@ -429,7 +429,7 @@ export default async function CompanyPage({ params }: { params: { ticker: string
     valuationRatios: {
       pe,
       pb,
-      evSales,       // UI'da "Fiyat/Satış" yazıyorsa etiketi güncelle veya PS için ayrı satır ekle
+      ps,       // UI'da "Fiyat/Satış" yazıyorsa etiketi güncelle veya PS için ayrı satır ekle
       evEbitda,
       netDebtEbitda: ndEbitda,
     },
