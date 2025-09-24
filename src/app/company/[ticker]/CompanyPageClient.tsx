@@ -2,12 +2,17 @@
 "use client";
 
 import { useState, useEffect, useRef } from 'react';
-import { motion, useInView } from "framer-motion";
+import { motion, useInView, AnimatePresence } from "framer-motion";
 import {
   FiInfo, FiBarChart2, FiPieChart, FiTrendingUp,
   FiBriefcase, FiUsers, FiCheckSquare, FiArrowRight, FiX
 } from "react-icons/fi";
 import { Treemap, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, PieChart, Pie } from 'recharts';
+// 3D grafikler için yeni importlar
+import { Canvas, useFrame } from '@react-three/fiber';
+import { OrbitControls, Ring } from '@react-three/drei';
+import * as THREE from 'three';
+
 
 type PageData = {
   ticker: string;
@@ -43,6 +48,22 @@ export default function CompanyPageClient({ data }: { data: PageData }) {
   const [activeSection, setActiveSection] = useState('genel-bakis');
   const [showAllManagers, setShowAllManagers] = useState(false);
 
+  // --- YENİ DEĞERLEME BÖLÜMÜ İÇİN STATE VE VERİ HAZIRLIĞI ---
+  type ValuationMetricKey = 'pe' | 'pb' | 'ps';
+  const [activeMetric, setActiveMetric] = useState<ValuationMetricKey>('pe');
+
+  const marketCap = generalInfo.marketCap;
+  const impliedEarnings = (marketCap && valuationRatios.pe) ? marketCap / valuationRatios.pe : null;
+  const impliedBookValue = (marketCap && valuationRatios.pb) ? marketCap / valuationRatios.pb : null;
+  const impliedSales = (marketCap && valuationRatios.ps) ? marketCap / valuationRatios.ps : null;
+
+  const valuationData = {
+    pe: { title: "F/K Oranı", value: valuationRatios.pe, metricName: "Net Kâr (Yıllıklandırılmış)", metricValue: impliedEarnings, color: '#06b6d4' },
+    pb: { title: "PD/DD Oranı", value: valuationRatios.pb, metricName: "Özkaynaklar", metricValue: impliedBookValue, color: '#8b5cf6'},
+    ps: { title: "Fiyat/Satış Oranı", value: valuationRatios.ps, metricName: "Satışlar (Yıllıklandırılmış)", metricValue: impliedSales, color: '#ec4899' }
+  };
+  const selectedMetricData = valuationData[activeMetric];
+
   return (
     <div className="bg-gray-900 text-gray-200 min-h-screen font-sans flex">
       <aside className="w-64 hidden lg:block sticky top-0 h-screen bg-gray-900/70 backdrop-blur-sm border-r border-gray-800 p-6">
@@ -71,14 +92,39 @@ export default function CompanyPageClient({ data }: { data: PageData }) {
         </AnimatedSection>
 
         <AnimatedSection id="degerleme" setActive={setActiveSection}>
-          <SectionHeader title="Finansal Değerleme" subtitle="Şirket çarpanları ve rasyolar" />
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mt-6">
-            <RatioCircle title="F/K" value={valuationRatios.pe} />
-            <RatioCircle title="PD/DD" value={valuationRatios.pb} />
-            <RatioCircle title="Fiyat/Satış" value={valuationRatios.ps} />
-            <RatioCircle title="FD/FAVÖK" value={valuationRatios.evEbitda} />
-            <RatioCircle title="Net Borç/FAVÖK" value={valuationRatios.netDebtEbitda} />
-          </div>
+            <SectionHeader title="Finansal Değerleme" subtitle="Şirket çarpanları ve rasyoları" />
+            <div className="mt-8">
+                <div className="flex justify-center items-center gap-2 md:gap-4 mb-8 flex-wrap">
+                    {(Object.keys(valuationData) as ValuationMetricKey[]).map(key => (
+                        <motion.button key={key} onClick={() => setActiveMetric(key)}
+                            className={`px-4 py-2 md:px-6 md:py-2 rounded-full text-base md:text-lg font-semibold transition-colors relative ${ activeMetric === key ? 'text-white' : 'text-gray-400 hover:text-white' }`}>
+                            {activeMetric === key && (
+                                <motion.div layoutId="activeMetricIndicator"
+                                    className="absolute inset-0 bg-cyan-600/50 rounded-full"
+                                    style={{ borderRadius: 9999 }}
+                                    transition={{ type: 'spring', stiffness: 500, damping: 30 }} />
+                            )}
+                            <span className="relative z-10">{valuationData[key].title}</span>
+                        </motion.button>
+                    ))}
+                </div>
+                <AnimatePresence mode="wait">
+                    <motion.div key={activeMetric}
+                        initial={{ opacity: 0, y: 30 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -30 }}
+                        transition={{ duration: 0.4 }}>
+                        <FuturisticValuationMetric
+                            title={selectedMetricData.title}
+                            value={selectedMetricData.value}
+                            metricName={selectedMetricData.metricName}
+                            metricValue={selectedMetricData.metricValue}
+                            marketCap={generalInfo.marketCap}
+                            color={selectedMetricData.color}
+                        />
+                    </motion.div>
+                </AnimatePresence>
+            </div>
         </AnimatedSection>
 
         <AnimatedSection id="bilanco" setActive={setActiveSection}>
@@ -137,8 +183,6 @@ export default function CompanyPageClient({ data }: { data: PageData }) {
               </button>
             )}
           </div>
-
-          {/* Modal: Kalan üyeler */}
           {showAllManagers && (
             <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
               <div className="bg-gray-900 w-full max-w-2xl rounded-2xl border border-gray-700 p-6 relative">
@@ -180,14 +224,87 @@ export default function CompanyPageClient({ data }: { data: PageData }) {
   );
 }
 
-// --- YARDIMCI / GRAFİK ---
+// --- YARDIMCI / GRAFİK BİLEŞENLERİ ---
+
+function FuturisticValuationMetric({ title, value, metricName, metricValue, marketCap, color = '#06b6d4' }: { title: string; value: number | null; metricName: string; metricValue: number | null; marketCap: number | null; color?: string; }) {
+  const [isHovered, setIsHovered] = useState(false);
+  const formattedValue = value != null && isFinite(value) ? value.toFixed(1) + 'x' : '–';
+  const displayRatio = (metricValue && marketCap) ? Math.min(Math.max(metricValue / marketCap, 0), 1) : 0;
+
+  return (
+    <div
+      className="relative w-full h-80 md:h-96 max-w-lg mx-auto bg-gray-900/50 rounded-3xl border border-gray-700/50 overflow-hidden cursor-pointer transition-all duration-300 hover:border-cyan-500/80 hover:shadow-2xl hover:shadow-cyan-500/20"
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+    >
+      <Canvas camera={{ position: [0, 0, 5], fov: 50 }}>
+        <ambientLight intensity={0.5} />
+        <pointLight position={[10, 10, 10]} intensity={1} />
+        <Metric3D
+          isHovered={isHovered}
+          color={color}
+          ratio={displayRatio}
+        />
+        <OrbitControls enableZoom={false} enablePan={false} autoRotate autoRotateSpeed={isHovered ? 0.5 : 1.5} />
+      </Canvas>
+      <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+        <motion.div
+          animate={{ scale: isHovered ? 1.2 : 1 }}
+          transition={{ type: 'spring', stiffness: 300, damping: 15 }}
+        >
+          <p className="text-5xl font-bold tracking-tighter text-white" style={{ textShadow: `0 0 15px ${color}` }}>
+            {formattedValue}
+          </p>
+          <p className="text-center text-gray-300 mt-1">{title}</p>
+        </motion.div>
+      </div>
+      <motion.div
+        className="absolute bottom-0 left-0 right-0 p-4 bg-black/40 backdrop-blur-sm pointer-events-none"
+        initial={{ y: '100%' }}
+        animate={{ y: isHovered ? '0%' : '100%' }}
+        transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+      >
+        <div className="text-center">
+            <p className="font-semibold text-white">Piyasa Değeri: <span className="text-cyan-400">{fmtMoney(marketCap)}₺</span></p>
+            <p className="font-semibold text-white">{metricName}: <span className="text-cyan-400">{fmtMoney(metricValue)}₺</span></p>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+function Metric3D({ isHovered, color, ratio }: { isHovered: boolean, color: string, ratio: number }) {
+  const groupRef = useRef<THREE.Group>(null);
+  useFrame((state) => {
+    if (groupRef.current) {
+      const t = state.clock.getElapsedTime();
+      groupRef.current.scale.setScalar(1 + Math.sin(t * 2) * 0.03);
+    }
+  });
+  const fullRadius = 2.0;
+  const metricAngle = Math.PI * 2 * ratio;
+  return (
+    <motion.group ref={groupRef}
+      animate={{ scale: isHovered ? 1.15 : 1 }}
+      transition={{ type: 'spring' }}
+    >
+      <Ring args={[fullRadius - 0.1, fullRadius, 64]} rotation-x={-Math.PI / 2}>
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={isHovered ? 0.4 : 0.1} side={THREE.DoubleSide} transparent opacity={0.4} />
+      </Ring>
+      <Ring args={[fullRadius - 0.1, fullRadius, 64, 8, 0, metricAngle]} rotation-x={-Math.PI / 2}>
+         <meshStandardMaterial color={color} emissive={color} emissiveIntensity={isHovered ? 0.8 : 0.3} side={THREE.DoubleSide} />
+      </Ring>
+      <pointLight position={[0, 0, 0]} color={color} intensity={isHovered ? 2.5 : 1.0} distance={5} />
+    </motion.group>
+  );
+}
+
 function AnimatedSection({ id, setActive, children }: { id: string; setActive: (id: string) => void; children: React.ReactNode; }) {
   const ref = useRef(null);
   const isInView = useInView(ref, { amount: 0.3, once: false });
   useEffect(() => {
     if (isInView) { setActive(id); }
   }, [isInView, id, setActive]);
-
   return (
     <motion.section id={id} ref={ref} className="min-h-[60vh] py-16"
       initial={{ opacity: 0, y: 50 }}
@@ -222,17 +339,6 @@ function InfoCard({ title, value, isSmall = false, isLink = false }: { title: st
           {value}
         </p>
       )}
-    </div>
-  );
-}
-
-function RatioCircle({ title, value }: { title: string; value: number | null; }) {
-  return (
-    <div className="flex flex-col items-center justify-center bg-gray-900/70 p-4 rounded-full w-36 h-36 mx-auto border-2 border-cyan-800/50 transition-all duration-300 hover:border-cyan-500 hover:scale-105 cursor-pointer text-center">
-      <p className="text-sm text-gray-400">{title}</p>
-      <p className="text-4xl font-bold mt-1 text-white">
-        {value != null && isFinite(value) ? value.toFixed(1) : '–'}
-      </p>
     </div>
   );
 }
@@ -308,10 +414,10 @@ function CashFlowWaterfallChart({ data }: { data: any[]; }) {
           <XAxis dataKey="name" stroke="#9ca3af" />
           <YAxis stroke="#9ca3af" tickFormatter={(tick) => fmtMoney(tick) as string} />
           <Tooltip
-  cursor={{ fill: 'rgba(255,255,255,0.1)' }}
-  contentStyle={{ backgroundColor: '#1f2937', border: '1px solid #374151' }}
-  formatter={(value: any) => fmtMoney(value)}
-/>
+            cursor={{ fill: 'rgba(255,255,255,0.1)' }}
+            contentStyle={{ backgroundColor: '#1f2937', border: '1px solid #374151' }}
+            formatter={(value: any) => fmtMoney(value)}
+          />
           <Bar dataKey="start" stackId="a" fill="transparent" />
           <Bar dataKey="value" stackId="a">
             {processedData.map((entry, index) => (

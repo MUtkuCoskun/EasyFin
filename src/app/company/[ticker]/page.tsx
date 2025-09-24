@@ -286,6 +286,7 @@ export default async function CompanyPage({ params }: { params: { ticker: string
   const depAmort     = codes["4B"];
 
   // Dash öncelikli (varsa), yoksa FIN'den
+  
   const lastRevenue  = dashLatest(dashRows, "Dash2","Satış Gelirleri") ?? latestNonEmpty(netSales, periods);
   const lastCOGS     = dashLatest(dashRows, "Dash3","Satışların Maliyeti (-)") ?? latestNonEmpty(costOfSales, periods);
   const lastGross    = dashLatest(dashRows, "Dash4","BRÜT KAR (ZARAR)") ?? latestNonEmpty(grossProfit, periods);
@@ -432,6 +433,9 @@ export default async function CompanyPage({ params }: { params: { ticker: string
       ps,       // UI'da "Fiyat/Satış" yazıyorsa etiketi güncelle veya PS için ayrı satır ekle
       evEbitda,
       netDebtEbitda: ndEbitda,
+       earnings: ttmNI,      // Yıllıklandırılmış Net Kâr
+    bookValue: equity,    // Son dönem Özkaynaklar (Defter Değeri)
+    sales: ttmSales       // Yıllıklandırılmış Satışlar
     },
     balanceSheet: {
       assets: assetsArr,
