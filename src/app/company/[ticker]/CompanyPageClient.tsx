@@ -38,7 +38,8 @@ const METRICS = [
     min: 0, 
     max: 40,
     gradient: "from-cyan-400 via-blue-500 to-purple-600",
-    shadowColor: "rgba(14, 165, 233, 0.4)"
+    shadowColor: "rgba(14, 165, 233, 0.4)",
+    benchmark: "S&P 500: 18-22x"
   },
   { 
     key: "pb", 
@@ -47,7 +48,8 @@ const METRICS = [
     min: 0, 
     max: 8,
     gradient: "from-emerald-400 via-teal-500 to-cyan-600",
-    shadowColor: "rgba(16, 185, 129, 0.4)"
+    shadowColor: "rgba(16, 185, 129, 0.4)",
+    benchmark: "BIST 100: 1.2x"
   },
   { 
     key: "ps", 
@@ -56,7 +58,8 @@ const METRICS = [
     min: 0, 
     max: 12,
     gradient: "from-purple-400 via-pink-500 to-rose-600",
-    shadowColor: "rgba(168, 85, 247, 0.4)"
+    shadowColor: "rgba(168, 85, 247, 0.4)",
+    benchmark: "Sektör Ort: 2.1x"
   },
   { 
     key: "evEbitda", 
@@ -65,7 +68,8 @@ const METRICS = [
     min: 0, 
     max: 25,
     gradient: "from-orange-400 via-red-500 to-pink-600",
-    shadowColor: "rgba(249, 115, 22, 0.4)"
+    shadowColor: "rgba(249, 115, 22, 0.4)",
+    benchmark: "Global Ort: 12x"
   },
   { 
     key: "netDebtEbitda", 
@@ -74,7 +78,8 @@ const METRICS = [
     min: -2, 
     max: 8,
     gradient: "from-indigo-400 via-purple-500 to-fuchsia-600",
-    shadowColor: "rgba(99, 102, 241, 0.4)"
+    shadowColor: "rgba(99, 102, 241, 0.4)",
+    benchmark: "Güvenli: <3x"
   },
 ] as const;
 
@@ -83,7 +88,7 @@ function clamp(v: number, min: number, max: number) {
 }
 
 function ModernRatioCard({
-  oran, min, max, baslik, ipucu, gradient, shadowColor
+  oran, min, max, baslik, ipucu, gradient, shadowColor, benchmark
 }: {
   oran: number | null;
   min: number;
@@ -92,6 +97,7 @@ function ModernRatioCard({
   ipucu: string;
   gradient: string;
   shadowColor: string;
+  benchmark: string;
 }) {
   const [isHovered, setIsHovered] = useState(false);
   const [mousePos, setMousePos] = useState({ x: 0.5, y: 0.5 });
@@ -99,7 +105,7 @@ function ModernRatioCard({
 
   const percentage = useMemo(() => {
     if (oran == null || !isFinite(oran)) return 0;
-    return clamp((oran - min) / (max - min), 0, 1) * 100;
+    return Math.min(100, clamp((oran - min) / (max - min), 0, 1) * 100);
   }, [oran, min, max]);
 
   const animatedPercentage = useMotionValue(0);
@@ -156,11 +162,14 @@ function ModernRatioCard({
         }}
         transition={{ type: "spring", stiffness: 200, damping: 25 }}
       >
-        {/* Animated Gradient Background */}
+        {/* Smooth Animated Gradient Background */}
         <motion.div
-          className={`absolute inset-0 bg-gradient-to-br ${gradient} opacity-0`}
-          animate={{ opacity: isHovered ? 0.1 : 0.05 }}
-          transition={{ duration: 0.6 }}
+          className={`absolute inset-0 bg-gradient-to-br ${gradient}`}
+          animate={{ 
+            opacity: isHovered ? 0.15 : 0.08,
+            scale: isHovered ? 1.05 : 1
+          }}
+          transition={{ duration: 0.8, ease: "easeInOut" }}
         />
 
         {/* Floating Orbs */}
@@ -190,15 +199,15 @@ function ModernRatioCard({
           {/* Header */}
           <div className="text-center">
             <motion.h3 
-              className="text-sm font-medium text-white/60 mb-1"
+              className="text-sm font-bold text-white/90 mb-1"
               animate={{ y: isHovered ? -2 : 0 }}
               transition={{ type: "spring", stiffness: 300, damping: 30 }}
             >
               {baslik}
             </motion.h3>
             <motion.p 
-              className="text-xs text-white/40"
-              animate={{ opacity: isHovered ? 0.8 : 0.6 }}
+              className="text-xs font-medium text-white/60"
+              animate={{ opacity: isHovered ? 0.8 : 0.7 }}
               transition={{ duration: 0.3 }}
             >
               {ipucu}
@@ -214,7 +223,7 @@ function ModernRatioCard({
                   cx="70"
                   cy="70"
                   r="60"
-                  stroke="rgba(255,255,255,0.1)"
+                  stroke="rgba(255,255,255,0.15)"
                   strokeWidth="8"
                   fill="none"
                   strokeLinecap="round"
@@ -232,7 +241,7 @@ function ModernRatioCard({
                   initial={{ strokeDashoffset: `${2 * Math.PI * 60}` }}
                   animate={{ 
                     strokeDashoffset: `${2 * Math.PI * 60 * (1 - percentage / 100)}`,
-                    filter: isHovered ? "drop-shadow(0 0 8px rgba(255,255,255,0.4))" : "none"
+                    filter: isHovered ? "drop-shadow(0 0 12px rgba(255,255,255,0.6))" : "drop-shadow(0 0 4px rgba(255,255,255,0.2))"
                   }}
                   transition={{ duration: 1.5, ease: "easeOut" }}
                 />
@@ -240,9 +249,9 @@ function ModernRatioCard({
                 {/* Gradient Definition */}
                 <defs>
                   <linearGradient id={`gradient-${baslik}`} x1="0%" y1="0%" x2="100%" y2="100%">
-                    <stop offset="0%" stopColor="rgba(255,255,255,0.9)" />
-                    <stop offset="50%" stopColor="rgba(255,255,255,0.6)" />
-                    <stop offset="100%" stopColor="rgba(255,255,255,0.3)" />
+                    <stop offset="0%" stopColor="rgba(255,255,255,0.95)" />
+                    <stop offset="50%" stopColor="rgba(255,255,255,0.8)" />
+                    <stop offset="100%" stopColor="rgba(255,255,255,0.6)" />
                   </linearGradient>
                 </defs>
               </svg>
@@ -253,18 +262,18 @@ function ModernRatioCard({
                   className="text-3xl font-black text-white"
                   animate={{ 
                     scale: isHovered ? 1.1 : 1,
-                    textShadow: isHovered ? "0 0 20px rgba(255,255,255,0.5)" : "none"
+                    textShadow: isHovered ? "0 0 20px rgba(255,255,255,0.5)" : "0 0 8px rgba(255,255,255,0.2)"
                   }}
                   transition={{ type: "spring", stiffness: 300, damping: 30 }}
                 >
                   {displayValue}
                   {oran != null && isFinite(oran) && (
-                    <span className="text-lg font-normal text-white/70">x</span>
+                    <span className="text-lg font-bold text-white/80">x</span>
                   )}
                 </motion.div>
                 <motion.div
-                  className="text-xs text-white/50 mt-1"
-                  animate={{ opacity: isHovered ? 0.8 : 0.5 }}
+                  className="text-xs font-semibold text-white/70 mt-1"
+                  animate={{ opacity: isHovered ? 0.9 : 0.7 }}
                   transition={{ duration: 0.3 }}
                 >
                   {Math.round(percentage)}%
@@ -273,19 +282,15 @@ function ModernRatioCard({
             </div>
           </div>
 
-          {/* Status Indicator */}
+          {/* Benchmark Text */}
           <div className="flex items-center justify-center">
-            <motion.div
-              className={`w-2 h-2 rounded-full bg-gradient-to-r ${gradient}`}
-              animate={{
-                scale: isHovered ? [1, 1.3, 1] : 1,
-                boxShadow: isHovered ? `0 0 12px 2px ${shadowColor}` : `0 0 6px 1px ${shadowColor}`
-              }}
-              transition={{ 
-                scale: { repeat: isHovered ? Infinity : 0, duration: 1.5 },
-                boxShadow: { duration: 0.3 }
-              }}
-            />
+            <motion.p
+              className="text-xs font-medium text-white/50 text-center"
+              animate={{ opacity: isHovered ? 0.8 : 0.6 }}
+              transition={{ duration: 0.3 }}
+            >
+              {benchmark}
+            </motion.p>
           </div>
         </div>
 
@@ -314,16 +319,13 @@ function DegerlemePanel3D({ ratios }: { ratios: any }) {
             ipucu={m.ipucu}
             gradient={m.gradient}
             shadowColor={m.shadowColor}
+            benchmark={m.benchmark}
           />
         ))}
       </div>
     </div>
   );
 }
-
-/* ================================
-   Sayfanın geri kalanı
-   ================================ */
 
 export default function CompanyPageClient({ data }: { data: PageData }) {
   const { ticker, generalInfo, valuationRatios, balanceSheet, incomeStatement, cashFlow, ownership, management } = data;
