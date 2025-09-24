@@ -59,7 +59,7 @@ function mapByKey(
   const m: Record<string, any> = {};
   for (const r of rows || []) {
     for (const k of keyFields) {
-      const v = r?.[k];
+      const v = (r as any)?.[k];
       if (typeof v === "string" && v.trim()) {
         m[v.trim()] = r;
         break;
@@ -95,6 +95,48 @@ function mapPricesByKeyField(rows: any[]): Record<string, any> {
     }
   }
   return m;
+}
+
+// --------- DASH HELPERS (Firestore map → rows & latest-period pick) ----------
+function dashRowsFromDoc(doc: any): any[] {
+  if (!doc) return [];
+  // bazen { header, rows } olabilir; bazen doğrudan field map (1:{...}, 2:{...})
+  if (Array.isArray(doc.rows)) return doc.rows;
+  if (Array.isArray(doc)) return doc;
+  return Object.values(doc);
+}
+function isPeriodKey(k: string) {
+  return /^\d{4}\s*[\/\-.]\s*(\d{1,2})$/.test(k); // 2025/6, 2024-12 vb.
+}
+function parsePeriodSortKey(k: string) {
+  const m = k.match(/^(\d{4})\s*[\/\-.]\s*(\d{1,2})$/);
+  if (!m) return -Infinity;
+  const y = +m[1], mm = +m[2];
+  const qOrder = ({3: 1, 6: 2, 9: 3, 12: 4} as Record<number, number>)[mm] ?? 0;
+  return y * 10 + qOrder; // büyük olan daha yeni
+}
+function latestValFromDashRow(row: any): number | null {
+  const keys = Object.keys(row || {})
+    .filter(isPeriodKey)
+    .sort((a, b) => parsePeriodSortKey(b) - parsePeriodSortKey(a)); // new -> old
+  for (const k of keys) {
+    const v = toNum(row[k]);
+    if (v != null) return v;
+  }
+  return null;
+}
+function findDashRow(rows: any[], keys: string[]): any | null {
+  for (const r of rows) {
+    const code = (r?.Kod ?? r?.kod ?? "").toString().trim();
+    const label = (r?.Kalem ?? r?.kalem ?? r?.name ?? r?.field ?? "").toString().trim();
+    if (!code && !label) continue;
+    if (keys.some(k => k && (code === k || label === k))) return r;
+  }
+  return null;
+}
+function dashLatest(rows: any[], ...keys: string[]): number | null {
+  const r = findDashRow(rows, keys);
+  return r ? latestValFromDashRow(r) : null;
 }
 
 // --------- BASE URL + AUTH (ASYNC) ----------
@@ -177,7 +219,7 @@ export default async function CompanyPage({ params }: { params: { ticker: string
     getSheetDoc<SheetTable>(`tickers/${ticker}/sheets/FIN.table`),
     getSheetDoc<SheetTable>(`tickers/${ticker}/sheets/KAP.table`),
     getSheetDoc<SheetTable>(`tickers/${ticker}/sheets/PRICES.table`),
-    getSheetDoc<SheetTable>(`tickers/${ticker}/sheets/DASH.table`),
+    getSheetDoc<any>(`tickers/${ticker}/sheets/DASH.table`), // DASH.map olabilir
   ]);
 
   if (!fin) {
@@ -199,14 +241,13 @@ export default async function CompanyPage({ params }: { params: { ticker: string
 
   // ---------- PRICES (KESİN: Kod + Field → Value) ----------
   const priceRows = Array.isArray(prices?.rows)
-    ? prices!.rows
+    ? (prices as any).rows
     : Array.isArray(prices as any)
     ? (prices as any)
     : Object.values((prices as any) || {});
   const pMapPrices = mapPricesByKeyField(priceRows);
 
   // Price1_fiyat → Son fiyat, Price2_piyasa_değeri → Piyasa değeri
-  // (türkçe karakter varyasyonlarına da tolerans)
   const lastPrice =
     toNum(pMapPrices?.["Price1_fiyat"]?.Value ?? pMapPrices?.["Price1_fiyat"]?.value) ??
     toNum(pMapPrices?.["Price1_Fiyat"]?.Value ?? pMapPrices?.["Price1_Fiyat"]?.value);
@@ -226,19 +267,12 @@ export default async function CompanyPage({ params }: { params: { ticker: string
   const getKapExact = (path: string): string => {
     const r = kapMap[path];
     if (!r) return "";
-    const v = r?.value ?? r?.Value ?? r?.val ?? r?.data ?? "";
+    const v = (r as any)?.value ?? (r as any)?.Value ?? (r as any)?.val ?? (r as any)?.data ?? "";
     return typeof v === "string" ? v : String(v ?? "");
   };
 
-  // ---------- DASH (Dash* / D.VAL.* exact)
-  const dashMap = mapByKey(dash?.rows || [], ["kod", "key", "id", "name", "field", "ratio", "metric"]);
-  const dashNum = (...keys: string[]): number | null => {
-    for (const k of keys) {
-      const n = numFromRow(dashMap[k]);
-      if (n != null) return n;
-    }
-    return null;
-  };
+  // ---------- DASH (SADECE DASH — rasyolar buradan, en yeni dönem) ----------
+  const dashRows = dashRowsFromDoc(dash);
 
   // --- Income Statement (kesin kodlar) ---
   const netSales     = codes["3C"];
@@ -252,17 +286,17 @@ export default async function CompanyPage({ params }: { params: { ticker: string
   const depAmort     = codes["4B"];
 
   // Dash öncelikli (varsa), yoksa FIN'den
-  const lastRevenue  = dashNum("Dash2","Satış Gelirleri") ?? latestNonEmpty(netSales, periods);
-  const lastCOGS     = dashNum("Dash3","Satışların Maliyeti (-)") ?? latestNonEmpty(costOfSales, periods);
-  const lastGross    = dashNum("Dash4","BRÜT KAR (ZARAR)") ?? latestNonEmpty(grossProfit, periods);
-  const lastDep      = dashNum("Dash8","Amortisman Giderleri") ?? latestNonEmpty(depAmort, periods);
-  const lastOpProfit = dashNum("Dash11","FAALİYET KARI (ZARARI)") ?? latestNonEmpty(opProfit, periods);
-  const lastNI       = dashNum("Dash15","Ana Ortaklık Net Karı") ?? latestNonEmpty(netIncome, periods);
+  const lastRevenue  = dashLatest(dashRows, "Dash2","Satış Gelirleri") ?? latestNonEmpty(netSales, periods);
+  const lastCOGS     = dashLatest(dashRows, "Dash3","Satışların Maliyeti (-)") ?? latestNonEmpty(costOfSales, periods);
+  const lastGross    = dashLatest(dashRows, "Dash4","BRÜT KAR (ZARAR)") ?? latestNonEmpty(grossProfit, periods);
+  const lastDep      = dashLatest(dashRows, "Dash8","Amortisman Giderleri") ?? latestNonEmpty(depAmort, periods);
+  const lastOpProfit = dashLatest(dashRows, "Dash11","FAALİYET KARI (ZARARI)") ?? latestNonEmpty(opProfit, periods);
+  const lastNI       = dashLatest(dashRows, "Dash15","Ana Ortaklık Net Karı") ?? latestNonEmpty(netIncome, periods);
 
   // OPEX (Dash varsa topla; yoksa FIN)
-  const dM = dashNum("Dash5","Pazarlama Giderleri (-)");
-  const dA = dashNum("Dash6","Genel Yönetim Giderleri (-)");
-  const dR = dashNum("Dash7","Araştırma Geliştirme Giderleri (-)");
+  const dM = dashLatest(dashRows, "Dash5","Pazarlama Giderleri (-)");
+  const dA = dashLatest(dashRows, "Dash6","Genel Yönetim Giderleri (-)");
+  const dR = dashLatest(dashRows, "Dash7","Araştırma Geliştirme Giderleri (-)");
   const lastOpex =
     dM != null && dA != null
       ? (dM ?? 0) + (dA ?? 0) + (dR ?? 0)
@@ -304,37 +338,13 @@ export default async function CompanyPage({ params }: { params: { ticker: string
 
   const netDebt = (stDebt ?? 0) + (ltDebt ?? 0) - (cash ?? 0);
 
-  const dashPE        = dashNum("Dash31", "F/K");
-const dashPB        = dashNum("Dash32", "PD/DD");
-const dashEVSales   = dashNum("Dash33", "FD/Satışlar", "FD/Satış");
-const dashEVEBITDA  = dashNum("Dash34", "FD/FAVÖK");
-const dashND_EBITDA = dashNum("Dash35", "Net Borç/FAVÖK");
-
-// Fallback'ler: DASH boşsa eski mantığa dön
-const pe =
-  dashPE ??
-  (marketCap != null && ttmNI ? marketCap / ttmNI : null);
-
-const pb =
-  dashPB ??
-  (marketCap != null && equity != null && equity !== 0 ? marketCap / equity : null);
-
-// Not: FD/Satışlar EV/Sales'tır. Eski değişken adı "ps" idi; ama artık EV/Sales kullanıyoruz.
-const evSales =
-  dashEVSales ??
-  (marketCap != null && ttmSales
-    ? (marketCap + ((stDebt ?? 0) + (ltDebt ?? 0) - (cash ?? 0))) / ttmSales
-    : null);
-
-const evEbitda =
-  dashEVEBITDA ??
-  (ttmEBITDA != null && ttmEBITDA !== 0
-    ? ((marketCap ?? 0) + ((stDebt ?? 0) + (ltDebt ?? 0) - (cash ?? 0))) / ttmEBITDA
-    : null);
-
-const ndEbitda =
-  dashND_EBITDA ??
-  (ttmEBITDA ? ((stDebt ?? 0) + (ltDebt ?? 0) - (cash ?? 0)) / ttmEBITDA : null);
+  // ---------- Değerleme (yalnız DASH; en yeni dönem) ----------
+  // Not: Kodlar projedeki yeni mapping: Dash31..Dash35. Eski exportlarda Dash25 olabilir (F/K).
+  const pe        = dashLatest(dashRows, "Dash31", "Dash25", "F/K");
+  const pb        = dashLatest(dashRows, "Dash32", "PD/DD");
+  const evSales   = dashLatest(dashRows, "Dash33", "FD/Satışlar", "FD/Satış");
+  const evEbitda  = dashLatest(dashRows, "Dash34", "FD/FAVÖK");
+  const ndEbitda  = dashLatest(dashRows, "Dash35", "Net Borç/FAVÖK");
 
   // ---------- KAP exact (ad, sektör, adres, web) ----------
   const companyName =
@@ -385,10 +395,10 @@ const ndEbitda =
   if (!management.length) management.push({ name: "Veri Bekleniyor", position: "Yönetim Kurulu" });
 
   // ---------- Waterfall ----------
-  const wNWC = dashNum("DashNWC", "Net İşletme Sermayesi", "NWC") ?? 0;
-  const wOth = dashNum("DashOthers", "Diğer") ?? 0;
+  const wNWC = dashLatest(dashRows, "DashNWC", "Net İşletme Sermayesi", "NWC") ?? 0;
+  const wOth = dashLatest(dashRows, "DashOthers", "Diğer") ?? 0;
   const wFCF =
-    dashNum("DashFCF", "4CB", "Serbest Nakit Akım") ??
+    dashLatest(dashRows, "DashFCF", "Serbest Nakit Akım") ??
     ((lastNI ?? 0) + (lastDep ?? 0) + wNWC + wOth);
 
   // ---------- Treemap arrays (₺ bn) ----------
@@ -417,13 +427,12 @@ const ndEbitda =
       website,
     },
     valuationRatios: {
-  pe,
-  pb,
-  evSales,       // (eski ps yerine)
-  evEbitda,
-  netDebtEbitda: ndEbitda,
-},
-
+      pe,
+      pb,
+      evSales,       // UI'da "Fiyat/Satış" yazıyorsa etiketi güncelle veya PS için ayrı satır ekle
+      evEbitda,
+      netDebtEbitda: ndEbitda,
+    },
     balanceSheet: {
       assets: assetsArr,
       liabilities: liabArr,
