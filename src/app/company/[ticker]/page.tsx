@@ -354,16 +354,22 @@ export default async function CompanyPage({ params }: { params: { ticker: string
   // --------- Balance Breakdown (aynı dönem + totalden "Diğer") ----------
   const commonP = pickCommonPeriod(fin, codes);
 
-  // Totaller
-  const totalAssets   = readAt(codes["1BL"], commonP); // TOPLAM VARLIKLAR
-  const totalCurrL    = readAt(codes["2A"],  commonP); // KV Yükümlülükler
-  const totalNonCurrL = readAt(codes["2B"],  commonP); // UV Yükümlülükler
-  const totalLiab     = (totalCurrL ?? 0) + (totalNonCurrL ?? 0);
+// Resmî toplamlar (aynı dönem)
+const totalAssets = readAt(codes["1BL"], commonP);           // TOPLAM VARLIKLAR
+const totalSources =
+  readAt(codes["2ODB"], commonP) ?? totalAssets ?? null;     // TOPLAM KAYNAKLAR
 
-  // Özkaynak toplamı: 2N varsa onu al; yoksa 2O (Ana Ort.) + 2ODA (Azınlık)
-  const totalEquity =
-    readAt(codes["2N"], commonP) ??
-    ((readAt(codes["2O"], commonP) ?? 0) + (readAt(codes["2ODA"], commonP) ?? 0));
+// Özkaynak toplamı: 2N yoksa 2O (Ana Ort.) + 2ODA (Azınlık)
+const totalEquity =
+  readAt(codes["2N"], commonP) ??
+  ((readAt(codes["2O"], commonP) ?? 0) + (readAt(codes["2ODA"], commonP) ?? 0));
+
+// Yükümlülükleri muhasebe kimliğinden türet (her zaman varlıklarla tutar)
+const totalLiab =
+  totalSources != null && totalEquity != null
+    ? Math.max(totalSources - totalEquity, 0)
+    : ((readAt(codes["2A"], commonP) ?? 0) + (readAt(codes["2B"], commonP) ?? 0));
+
 
   // — Aday kalemleri oku (hepsi aynı dönemden) —
   function pv(code: string, name: string) {
