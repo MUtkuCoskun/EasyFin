@@ -345,7 +345,7 @@ function DegerlemePanel3D({ ratios }: { ratios: any }) {
 }
 
 /* ================================
-   Bilanço – 3 sütun (ilk 4 + Diğer)
+   Bilanço – 3 sütun (ilk 4 + Diğer) - GÜNCELLENMİŞ
    ================================ */
 
 type KV = { name: string; value: number };
@@ -384,12 +384,14 @@ function TripleBalanceTreemap({
 }
 
 function StackedRect({ title, items }: { title: string; items: KV[] }) {
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const top5 = top4PlusOther(items);
   const total = top5.reduce((s, x) => s + x.value, 0);
 
   return (
     <div className="bg-gray-800/40 backdrop-blur-sm p-4 rounded-2xl border border-gray-700/40">
       <h3 className="text-lg font-bold text-white mb-3">{title}</h3>
+      
       <div className="relative rounded-xl overflow-hidden border border-white/10 bg-gray-900/40"
            style={{ height: 420 }}>
         {total <= 0 ? (
@@ -397,28 +399,92 @@ function StackedRect({ title, items }: { title: string; items: KV[] }) {
             Veri Bekleniyor
           </div>
         ) : (
-          <div className="flex flex-col h-full">
-            {top5.map((it, i) => {
-              const hPct = (it.value / total) * 100;
-              return (
-                <div key={i}
-                     className={`relative bg-gradient-to-r ${SEG_COLORS[i % SEG_COLORS.length]} 
-                                 border-b border-white/10 last:border-b-0`}
-                     style={{ height: `${hPct}%` }}>
-                  <div className="absolute inset-0 p-3 flex items-end">
-                    <div className="w-full flex items-center justify-between gap-2
-                                    bg-black/20 backdrop-blur-[1px] rounded-md px-2 py-1">
-                      <span className="text-white text-sm font-semibold truncate">{it.name}</span>
-                      <span className="text-white text-xs opacity-90">
-                        {fmtBnTry(it.value)} <span className="opacity-75">({hPct.toFixed(0)}%)</span>
+          <>
+            <div className="flex flex-col h-full">
+              {top5.map((it, i) => {
+                const hPct = (it.value / total) * 100;
+                const isHovered = hoveredIndex === i;
+                
+                return (
+                  <motion.div
+                    key={i}
+                    className={`relative bg-gradient-to-r ${SEG_COLORS[i % SEG_COLORS.length]} 
+                               border-b border-white/10 last:border-b-0 cursor-pointer group`}
+                    style={{ height: `${hPct}%` }}
+                    onMouseEnter={() => setHoveredIndex(i)}
+                    onMouseLeave={() => setHoveredIndex(null)}
+                    whileHover={{ 
+                      scale: 1.02,
+                      filter: "brightness(1.1)",
+                      transition: { duration: 0.2 }
+                    }}
+                    transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                  >
+                    {/* Minimal görünüm - sadece isim */}
+                    <div className="absolute inset-0 p-2 flex items-center justify-center">
+                      <div className="text-center">
+                        <span className="text-white text-sm font-semibold block truncate max-w-32">
+                          {it.name}
+                        </span>
+                        {hPct >= 15 && (
+                          <span className="text-white/80 text-xs block mt-1">
+                            {hPct.toFixed(0)}%
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Hover overlay ile parlaklık efekti */}
+                    <motion.div
+                      className="absolute inset-0 bg-white/20 pointer-events-none"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: isHovered ? 1 : 0 }}
+                      transition={{ duration: 0.2 }}
+                    />
+                  </motion.div>
+                );
+              })}
+            </div>
+
+            {/* Hover detay paneli */}
+            {hoveredIndex !== null && (
+              <motion.div
+                className="absolute top-2 right-2 bg-black/80 backdrop-blur-md rounded-lg p-3 border border-white/20 z-20 min-w-48"
+                initial={{ opacity: 0, scale: 0.9, x: 10 }}
+                animate={{ opacity: 1, scale: 1, x: 0 }}
+                transition={{ duration: 0.2, type: "spring", stiffness: 200 }}
+              >
+                <div className="text-white">
+                  <h4 className="font-semibold text-sm mb-2 text-cyan-400">
+                    {top5[hoveredIndex].name}
+                  </h4>
+                  <div className="space-y-1 text-xs">
+                    <div className="flex justify-between">
+                      <span className="text-gray-300">Tutar:</span>
+                      <span className="font-semibold">{fmtBnTry(top5[hoveredIndex].value)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-300">Oran:</span>
+                      <span className="font-semibold text-cyan-300">
+                        {((top5[hoveredIndex].value / total) * 100).toFixed(1)}%
                       </span>
                     </div>
                   </div>
                 </div>
-              );
-            })}
-          </div>
+
+                {/* Küçük ok işareti */}
+                <div className="absolute -left-1 top-1/2 transform -translate-y-1/2 w-2 h-2 bg-black/80 border-l border-t border-white/20 rotate-45"></div>
+              </motion.div>
+            )}
+          </>
         )}
+      </div>
+
+      {/* Alt kısımda özet bilgi */}
+      <div className="mt-3 text-center">
+        <p className="text-xs text-gray-400">
+          Toplam: <span className="font-semibold text-cyan-400">{fmtBnTry(total)}</span>
+        </p>
       </div>
     </div>
   );
@@ -480,7 +546,7 @@ export default function CompanyPageClient({ data }: { data: PageData }) {
           <DegerlemePanel3D ratios={valuationRatios} />
         </AnimatedSection>
 
-        {/* BİLANÇO – 3 Sütun, ilk4 + Diğer */}
+        {/* BİLANÇO – 3 Sütun, ilk4 + Diğer - GÜNCELLENMİŞ */}
         <AnimatedSection id="bilanco" setActive={setActiveSection}>
           <SectionHeader title="Bilanço Yapısı" subtitle="Varlıklar • Yükümlülükler • Özkaynaklar" />
           <TripleBalanceTreemap
@@ -583,8 +649,6 @@ function InfoCard({ title, value, isSmall = false, isLink = false }: { title: st
     </div>
   );
 }
-
-// (Eski treemap bileşeni projede kalabilir; kullanılmıyor ama istersen silebilirsin)
 
 function IncomeSankeyChart({ data }: { data: any; }) {
   const sankeyData = {
