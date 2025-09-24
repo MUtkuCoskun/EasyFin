@@ -503,40 +503,28 @@ function BalanceSheetTreemap({ title, data }: { title: string; data: any[]; }) {
 
   return (
     <motion.div 
-      className="bg-gradient-to-br from-gray-800/60 to-gray-900/80 backdrop-blur-sm p-6 rounded-3xl border border-white/10 w-full h-full flex flex-col relative overflow-hidden"
-      initial={{ opacity: 0, y: 20 }}
-      whileInView={{ opacity: 1, y: 0 }}
+      className="bg-gray-800/40 backdrop-blur-sm p-6 rounded-2xl border border-gray-700/30 w-full h-full flex flex-col relative overflow-hidden"
+      initial={{ opacity: 0, scale: 0.95 }}
+      whileInView={{ opacity: 1, scale: 1 }}
       viewport={{ once: true }}
-      transition={{ duration: 0.6, delay: 0.2 }}
+      transition={{ duration: 0.5, ease: "easeOut" }}
+      whileHover={{ 
+        boxShadow: "0 20px 40px -10px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.1)" 
+      }}
     >
-      {/* Animated Background Orbs */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <motion.div
-          className="absolute -top-10 -right-10 w-32 h-32 bg-gradient-to-br from-cyan-400/20 to-blue-600/20 rounded-full blur-2xl"
-          animate={{
-            scale: hoveredItem ? 1.2 : 1,
-            opacity: hoveredItem ? 0.3 : 0.2,
-          }}
-          transition={{ duration: 0.8 }}
-        />
-        <motion.div
-          className="absolute -bottom-8 -left-8 w-24 h-24 bg-gradient-to-br from-purple-400/15 to-pink-600/15 rounded-full blur-xl"
-          animate={{
-            scale: hoveredItem ? 1.1 : 1,
-            opacity: hoveredItem ? 0.25 : 0.15,
-          }}
-          transition={{ duration: 0.6 }}
-        />
-      </div>
+      {/* Subtle gradient overlay */}
+      <motion.div
+        className="absolute inset-0 bg-gradient-to-br from-white/[0.02] to-transparent rounded-2xl"
+        animate={{ opacity: hoveredItem ? 0.8 : 0.4 }}
+        transition={{ duration: 0.3 }}
+      />
 
       <motion.h3 
-        className="text-xl font-black text-white mb-6 relative z-10"
-        animate={{
-          textShadow: hoveredItem 
-            ? "0 0 20px rgba(255,255,255,0.4)" 
-            : "0 0 10px rgba(255,255,255,0.2)"
+        className="text-lg font-bold text-white mb-4 relative z-10"
+        animate={{ 
+          color: hoveredItem ? "#22d3ee" : "#ffffff"
         }}
-        transition={{ duration: 0.3 }}
+        transition={{ duration: 0.2 }}
       >
         {title}
       </motion.h3>
@@ -546,25 +534,18 @@ function BalanceSheetTreemap({ title, data }: { title: string; data: any[]; }) {
           <Treemap 
             data={data} 
             dataKey="value" 
-            stroke="#111827" 
+            stroke="#374151" 
             fill="#1f2937" 
-            content={<EnhancedTreemapContent onHover={setHoveredItem} />} 
+            content={<ModernTreemapContent onHover={setHoveredItem} />} 
             aspectRatio={4 / 3} 
           />
         </ResponsiveContainer>
       </div>
-
-      {/* Hover Overlay Effect */}
-      <motion.div
-        className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent pointer-events-none rounded-3xl"
-        animate={{ opacity: hoveredItem ? 1 : 0 }}
-        transition={{ duration: 0.3 }}
-      />
     </motion.div>
   );
 }
 
-function EnhancedTreemapContent({ onHover, ...props }: any & { onHover: (item: string | null) => void }) {
+function ModernTreemapContent({ onHover, ...props }: any & { onHover: (item: string | null) => void }) {
   const { depth, x, y, width, height, name, value, color } = props;
   const [isHovered, setIsHovered] = useState(false);
 
@@ -578,121 +559,112 @@ function EnhancedTreemapContent({ onHover, ...props }: any & { onHover: (item: s
     onHover(null);
   };
 
-  // Dynamic color based on hover state and item type
-  const getFillColor = () => {
+  // Smart color system based on original colors but enhanced
+  const getColors = () => {
+    const originalColor = color || (depth === 1 ? '#374151' : '#06b6d4');
+    
     if (isHovered) {
-      return color === '#1f2937' ? '#0ea5e9' : '#06b6d4'; // Bright cyan on hover
+      return {
+        fill: '#0ea5e9', // Bright blue on hover
+        stroke: '#22d3ee', // Cyan stroke
+        textColor: '#ffffff'
+      };
     }
-    return color || (depth === 1 ? '#374151' : '#06b6d4');
+    
+    return {
+      fill: originalColor,
+      stroke: '#4b5563', // Subtle gray stroke
+      textColor: '#f8fafc'
+    };
   };
 
+  const colors = getColors();
+
   return (
-    <g>
+    <g onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave}>
+      {/* Main rectangle */}
       <motion.rect 
         x={x} 
         y={y} 
         width={width} 
         height={height}
-        fill={getFillColor()}
-        stroke="#0f172a"
-        strokeWidth={isHovered ? 4 : 2}
-        rx={8} // Rounded corners
-        ry={8}
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
+        fill={colors.fill}
+        stroke={colors.stroke}
+        strokeWidth={isHovered ? 2 : 1}
+        rx={6}
+        ry={6}
         style={{ 
           cursor: 'pointer',
           filter: isHovered 
-            ? 'drop-shadow(0 0 20px rgba(6, 182, 212, 0.4)) brightness(1.1)' 
-            : 'drop-shadow(0 4px 8px rgba(0, 0, 0, 0.3))',
-          transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
+            ? 'drop-shadow(0 8px 25px rgba(14, 165, 233, 0.3)) brightness(1.05)' 
+            : 'drop-shadow(0 2px 8px rgba(0, 0, 0, 0.2))',
         }}
-        whileHover={{ 
-          scale: 1.02,
-          transition: { type: "spring", stiffness: 400, damping: 25 }
+        animate={{
+          scale: isHovered ? 1.02 : 1,
+        }}
+        transition={{ 
+          type: "spring", 
+          stiffness: 400, 
+          damping: 30 
         }}
       />
       
-      {/* Glow effect on hover */}
+      {/* Subtle inner glow on hover */}
       {isHovered && (
         <motion.rect
-          x={x - 2}
-          y={y - 2}
-          width={width + 4}
-          height={height + 4}
-          fill="none"
-          stroke="rgba(6, 182, 212, 0.6)"
-          strokeWidth={2}
-          rx={10}
-          ry={10}
+          x={x + 1}
+          y={y + 1}
+          width={width - 2}
+          height={height - 2}
+          fill="rgba(255, 255, 255, 0.1)"
+          rx={5}
+          ry={5}
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          transition={{ duration: 0.3 }}
-          style={{
-            filter: 'blur(4px)'
-          }}
+          transition={{ duration: 0.2 }}
         />
       )}
 
-      {/* Text with enhanced styling */}
-      {width > 80 && height > 40 && (
+      {/* Clean, readable text */}
+      {width > 70 && height > 35 && (
         <motion.g
-          initial={{ opacity: 0.8 }}
           animate={{ 
-            opacity: isHovered ? 1 : 0.9,
-            scale: isHovered ? 1.05 : 1
+            opacity: 1,
+            y: isHovered ? -1 : 0
           }}
-          transition={{ type: "spring", stiffness: 300, damping: 20 }}
+          transition={{ type: "spring", stiffness: 300, damping: 25 }}
         >
           <text 
             x={x + width / 2} 
-            y={y + height / 2} 
+            y={y + height / 2 - 8} 
             textAnchor="middle" 
-            dominantBaseline="central"
-            fill="#fff" 
-            fontSize={width > 120 ? 16 : 14}
-            fontWeight="bold"
+            dominantBaseline="middle"
+            fill={colors.textColor}
+            fontSize={Math.min(width / 8, height / 4, 14)}
+            fontWeight="600"
             style={{
-              textShadow: isHovered 
-                ? '0 0 15px rgba(255,255,255,0.8), 0 2px 4px rgba(0,0,0,0.5)' 
-                : '0 2px 4px rgba(0,0,0,0.7)',
-              filter: isHovered ? 'brightness(1.2)' : 'none'
+              textShadow: '0 1px 3px rgba(0,0,0,0.8)'
             }}
           >
-            <tspan x={x + width / 2} dy="-0.3em">
-              {name}
-            </tspan>
-            <tspan 
-              x={x + width / 2} 
-              dy="1.2em" 
-              fontSize={width > 120 ? 14 : 12}
-              fillOpacity={isHovered ? 0.9 : 0.8}
-              fontWeight="600"
-            >
-              {value.toFixed(1)}b ₺
-            </tspan>
+            {name}
+          </text>
+          
+          <text 
+            x={x + width / 2} 
+            y={y + height / 2 + 8} 
+            textAnchor="middle" 
+            dominantBaseline="middle"
+            fill={colors.textColor}
+            fontSize={Math.min(width / 10, height / 5, 12)}
+            fontWeight="500"
+            fillOpacity={0.9}
+            style={{
+              textShadow: '0 1px 2px rgba(0,0,0,0.6)'
+            }}
+          >
+            {value.toFixed(1)}b ₺
           </text>
         </motion.g>
-      )}
-
-      {/* Subtle particle effect on hover */}
-      {isHovered && (
-        <motion.circle
-          cx={x + width / 2}
-          cy={y + height / 2}
-          r={Math.min(width, height) / 6}
-          fill="rgba(255, 255, 255, 0.1)"
-          initial={{ scale: 0, opacity: 0 }}
-          animate={{ 
-            scale: [1, 1.5, 1], 
-            opacity: [0.3, 0.1, 0] 
-          }}
-          transition={{ 
-            duration: 1.2, 
-            repeat: Infinity, 
-            ease: "easeOut" 
-          }}
-        />
       )}
     </g>
   );
