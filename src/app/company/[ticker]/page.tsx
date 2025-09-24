@@ -340,11 +340,11 @@ export default async function CompanyPage({ params }: { params: { ticker: string
 
   // ---------- Değerleme (yalnız DASH; en yeni dönem) ----------
   // Not: Kodlar projedeki yeni mapping: Dash31..Dash35. Eski exportlarda Dash25 olabilir (F/K).
-  const pe        = dashLatest(dashRows, "Dash31", "Dash25", "F/K");
-  const pb        = dashLatest(dashRows, "Dash32", "PD/DD");
-  const evSales   = dashLatest(dashRows, "Dash33", "FD/Satışlar", "FD/Satış");
-  const evEbitda  = dashLatest(dashRows, "Dash34", "FD/FAVÖK");
-  const ndEbitda  = dashLatest(dashRows, "Dash35", "Net Borç/FAVÖK");
+  const pe        = dashLatest(dashRows, "Dash25", "F/K");
+  const pb        = dashLatest(dashRows, "Dash26", "PD/DD");
+  const evSales   = dashLatest(dashRows, "Dash27", "FD/Satışlar", "FD/Satış");
+  const evEbitda  = dashLatest(dashRows, "Dash28", "FD/FAVÖK");
+  const ndEbitda  = dashLatest(dashRows, "Dash29", "Net Borç/FAVÖK");
 
   // ---------- KAP exact (ad, sektör, adres, web) ----------
   const companyName =
