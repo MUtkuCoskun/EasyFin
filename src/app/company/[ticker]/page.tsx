@@ -210,7 +210,7 @@ export async function generateMetadata({
   };
 }
 
-// === küçük yardımcı: bilanço kalemi toparlayıcı ===
+// === küçük yardımcı: bilanço kalemi toparlayıcı (opsiyonel, başka yerlerde kullanılıyor) ===
 function pickVal(
   codes: Record<string, any>,
   code: string,
@@ -219,6 +219,24 @@ function pickVal(
 ) {
   const v = latestNonEmpty(codes[code], periods);
   return v != null ? { key: code, name: nameTR, value: v } : null;
+}
+
+// === helper: belirli bir dönemden okuma ===
+function readAt(row: any, periodKey: string | null): number | null {
+  if (!row || !periodKey) return null;
+  return toNum(row[periodKey]);
+}
+
+// === helper: ortak (aynı) son dönem seçimi ===
+function pickCommonPeriod(fin: SheetTable, codes: Record<string, any>): string | null {
+  const periods = pickPeriods(fin); // new -> old
+  // Toplamları barındıran kodlar (aktif toplam, KV ve UV yükümlülükler)
+  const musts = ["1BL", "2A", "2B"];
+  for (const p of periods) {
+    const ok = musts.every(k => toNum(codes[k]?.[p]) != null);
+    if (ok) return p;
+  }
+  return periods[0] ?? null;
 }
 
 // --------- PAGE (SERVER) ----------
@@ -320,10 +338,10 @@ export default async function CompanyPage({ params }: { params: { ticker: string
   // ---------- Balance Sheet (kesin kodlar) ----------
   const cash         = latestNonEmpty(codes["1AA"], periods);
   const receivables  = latestNonEmpty(codes["1AC"], periods);
-  const inventory    = latestNonEmpty(codes["1AF"], periods); // Stoklar = 1AF
+  const inventory    = latestNonEmpty(codes["1AF"], periods);
   const stDebt       = latestNonEmpty(codes["2AA"], periods);
   const ltDebt       = latestNonEmpty(codes["2BA"], periods);
-  const equity       = latestNonEmpty(codes["2O"],  periods);
+  const equityAny    = latestNonEmpty(codes["2O"],  periods);
 
   const currLiab     = latestNonEmpty(codes["2A"], periods);
   const nonCurrLiab  = latestNonEmpty(codes["2B"], periods);
@@ -333,49 +351,74 @@ export default async function CompanyPage({ params }: { params: { ticker: string
       ? Math.max(currLiab + nonCurrLiab - totalDebt, 0)
       : null;
 
-  // --------- Balance Breakdown (top4 + OTHER için zengin havuz) ----------
-  const assetsItemsRaw = [
-    pickVal(codes, "1AA", periods, "Nakit ve Benzerleri"),
-    pickVal(codes, "1AB", periods, "KV Finansal Yatırımlar"),
-    pickVal(codes, "1AC", periods, "Ticari Alacaklar (KV)"),
-    pickVal(codes, "1AF", periods, "Stoklar"),
-    pickVal(codes, "1AH", periods, "Diğer Dönen Varlıklar"),
-    pickVal(codes, "1BG", periods, "Maddi Duran Varlıklar"),
-    pickVal(codes, "1BH", periods, "Maddi Olmayan Duran Varlıklar"),
-    pickVal(codes, "1BC", periods, "UV Finansal Yatırımlar"),
-    pickVal(codes, "1BD", periods, "Özkaynak Yöntemi Yatırımları"),
-    pickVal(codes, "1BF", periods, "Yatırım Amaçlı Gayrimenkuller"),
-    pickVal(codes, "1BJ", periods, "Ertelenmiş Vergi Varlığı"),
-    pickVal(codes, "1BK", periods, "Diğer Duran Varlıklar"),
-  ].filter(Boolean) as Array<{key:string; name:string; value:number}>;
+  // --------- Balance Breakdown (aynı dönem + totalden "Diğer") ----------
+  const commonP = pickCommonPeriod(fin, codes);
 
-  const stOther = (currLiab != null && stDebt != null) ? Math.max(currLiab - stDebt, 0) : null;
-  const ltOther = (nonCurrLiab != null && ltDebt != null) ? Math.max(nonCurrLiab - ltDebt, 0) : null;
+  // Totaller
+  const totalAssets   = readAt(codes["1BL"], commonP); // TOPLAM VARLIKLAR
+  const totalCurrL    = readAt(codes["2A"],  commonP); // KV Yükümlülükler
+  const totalNonCurrL = readAt(codes["2B"],  commonP); // UV Yükümlülükler
+  const totalLiab     = (totalCurrL ?? 0) + (totalNonCurrL ?? 0);
 
-  const liabilitiesItemsRaw = [
-    pickVal(codes, "2AA", periods, "KV Finansal Borçlar"),
-    stOther != null ? { key: "2A_OTHER", name: "Diğer Kısa Vadeli Yük.", value: stOther } : null,
-    pickVal(codes, "2BA", periods, "UV Finansal Borçlar"),
-    ltOther != null ? { key: "2B_OTHER", name: "Diğer Uzun Vadeli Yük.", value: ltOther } : null,
-    pickVal(codes, "2AAGAA", periods, "Ticari Borçlar (KV)"),
-    pickVal(codes, "2BBA", periods, "Ticari Borçlar (UV)"),
-    pickVal(codes, "2BF", periods, "Kıdem Tazm. ve Benzeri Karş."),
-    pickVal(codes, "2BG", periods, "Ertelenmiş Vergi Yük."),
-    pickVal(codes, "2BH", periods, "Diğer Uzun Vadeli Yük."),
-  ].filter(Boolean) as Array<{key:string; name:string; value:number}>;
+  // Özkaynak toplamı: 2N varsa onu al; yoksa 2O (Ana Ort.) + 2ODA (Azınlık)
+  const totalEquity =
+    readAt(codes["2N"], commonP) ??
+    ((readAt(codes["2O"], commonP) ?? 0) + (readAt(codes["2ODA"], commonP) ?? 0));
 
-  const equityItemsRaw = [
-    pickVal(codes, "2OA",  periods, "Ödenmiş Sermaye"),
-    pickVal(codes, "2OCE", periods, "Geçmiş Yıllar K/Z"),
-    pickVal(codes, "2OCF", periods, "Dönem Net K/Z"),
-    pickVal(codes, "2OCB", periods, "Değer Artış Fonları"),
-    pickVal(codes, "2Oca", periods, "Hisse Senedi İhraç Primleri"),
-    pickVal(codes, "2OD",  periods, "Diğer Özsermaye Kalemleri"),
-  ].filter(Boolean) as Array<{key:string; name:string; value:number}>;
-
-  if (!equityItemsRaw.length && equity != null) {
-    equityItemsRaw.push({ key: "2O", name: "Özkaynaklar", value: equity });
+  // — Aday kalemleri oku (hepsi aynı dönemden) —
+  function pv(code: string, name: string) {
+    const v = readAt(codes[code], commonP);
+    return v != null ? { key: code, name, value: v } : null;
   }
+
+  const assetsPool = [
+    pv("1AA","Nakit ve Benzerleri"),
+    pv("1AB","KV Finansal Yatırımlar"),
+    pv("1AC","Ticari Alacaklar (KV)"),
+    pv("1AF","Stoklar"),
+    pv("1AH","Diğer Dönen Varlıklar"),
+    pv("1BG","Maddi Duran Varlıklar"),
+    pv("1BH","Maddi Olmayan Duran Varlıklar"),
+    pv("1BC","UV Finansal Yatırımlar"),
+    pv("1BD","Özkaynak Yöntemi Yatırımları"),
+    pv("1BF","Yatırım Amaçlı Gayrimenkuller"),
+    pv("1BJ","Ertelenmiş Vergi Varlığı"),
+    pv("1BK","Diğer Duran Varlıklar"),
+  ].filter(Boolean) as Array<{key:string; name:string; value:number}>;
+
+  const liabilitiesPool = [
+    pv("2AA","KV Finansal Borçlar"),
+    pv("2AAGAA","Ticari Borçlar (KV)"),
+    pv("2BA","UV Finansal Borçlar"),
+    pv("2BBA","Ticari Borçlar (UV)"),
+    pv("2BF","Kıdem Tazm. ve Benzeri Karş."),
+    pv("2BG","Ertelenmiş Vergi Yük."),
+    pv("2BH","Diğer Uzun Vadeli Yük."),
+  ].filter(Boolean) as Array<{key:string; name:string; value:number}>;
+
+  const equityPool = [
+    pv("2OA","Ödenmiş Sermaye"),
+    pv("2OCE","Geçmiş Yıllar K/Z"),
+    pv("2OCF","Dönem Net K/Z"),
+    pv("2OCB","Değer Artış Fonları"),
+    pv("2Oca","Hisse Senedi İhraç Primleri"),
+    pv("2OD","Diğer Özsermaye Kalemleri"),
+    pv("2ODA","Azınlık Payları"),
+  ].filter(Boolean) as Array<{key:string; name:string; value:number}>;
+
+  // — ilk4 + Diğer (toplamdan) —
+  function top4PlusOtherToTotal(pool: {name:string; value:number}[], total: number | null) {
+    const list = (pool || []).filter(x => x.value > 0).sort((a,b)=>b.value-a.value);
+    if (!total || total <= 0) return list.slice(0,5);
+    const top4 = list.slice(0,4);
+    const sumTop4 = top4.reduce((s,x)=>s+x.value, 0);
+    const other = Math.max(total - sumTop4, 0);
+    return [...top4, { name: "Diğer", value: other }];
+  }
+
+  const assetsItems      = top4PlusOtherToTotal(assetsPool, totalAssets);
+  const liabilitiesItems = top4PlusOtherToTotal(liabilitiesPool, totalLiab);
+  const equityItems      = top4PlusOtherToTotal(equityPool, totalEquity);
 
   // ---------- TTM ----------
   const ttmSales   = sumLastN(netSales, periods, 4);
@@ -473,13 +516,13 @@ export default async function CompanyPage({ params }: { params: { ticker: string
       evEbitda,
       netDebtEbitda: ndEbitda,
       earnings: ttmNI,      // Yıllıklandırılmış Net Kâr
-      bookValue: equity,    // Son dönem Özkaynaklar (Defter Değeri)
+      bookValue: equityAny, // Son dönem Özkaynaklar (Defter Değeri)
       sales: ttmSales       // Yıllıklandırılmış Satışlar
     },
     balanceSheet: {
-      assetsItems: assetsItemsRaw,
-      liabilitiesItems: liabilitiesItemsRaw,
-      equityItems: equityItemsRaw,
+      assetsItems: assetsItems,
+      liabilitiesItems: liabilitiesItems,
+      equityItems: equityItems,
     },
     incomeStatement: {
       revenue: lastRevenue,
