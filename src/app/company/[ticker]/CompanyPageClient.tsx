@@ -499,174 +499,175 @@ function InfoCard({ title, value, isSmall = false, isLink = false }: { title: st
 }
 
 function BalanceSheetTreemap({ title, data }: { title: string; data: any[]; }) {
-  const [hoveredItem, setHoveredItem] = useState<string | null>(null);
+  const [hoveredCard, setHoveredCard] = useState<number | null>(null);
 
   return (
     <motion.div 
-      className="bg-gray-800/40 backdrop-blur-sm p-6 rounded-2xl border border-gray-700/30 w-full h-full flex flex-col relative overflow-hidden"
-      initial={{ opacity: 0, scale: 0.95 }}
-      whileInView={{ opacity: 1, scale: 1 }}
+      className="relative w-full h-full"
+      initial={{ opacity: 0, y: 20 }}
+      whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true }}
-      transition={{ duration: 0.5, ease: "easeOut" }}
-      whileHover={{ 
-        boxShadow: "0 20px 40px -10px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.1)" 
-      }}
+      transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
     >
-      {/* Subtle gradient overlay */}
-      <motion.div
-        className="absolute inset-0 bg-gradient-to-br from-white/[0.02] to-transparent rounded-2xl"
-        animate={{ opacity: hoveredItem ? 0.8 : 0.4 }}
-        transition={{ duration: 0.3 }}
-      />
-
       <motion.h3 
-        className="text-lg font-bold text-white mb-4 relative z-10"
+        className="text-xl font-bold text-white mb-6"
         animate={{ 
-          color: hoveredItem ? "#22d3ee" : "#ffffff"
+          x: hoveredCard !== null ? 8 : 0,
+          color: hoveredCard !== null ? "#22d3ee" : "#ffffff"
         }}
-        transition={{ duration: 0.2 }}
+        transition={{ type: "spring", stiffness: 300, damping: 25 }}
       >
         {title}
       </motion.h3>
       
-      <div className="flex-1 relative z-10">
-        <ResponsiveContainer width="100%" height="100%">
-          <Treemap 
-            data={data} 
-            dataKey="value" 
-            stroke="#374151" 
-            fill="#1f2937" 
-            content={<ModernTreemapContent onHover={setHoveredItem} />} 
-            aspectRatio={4 / 3} 
+      <div className="grid gap-3 h-[400px]">
+        {data.map((item, index) => (
+          <ModernBalanceCard
+            key={item.name}
+            item={item}
+            index={index}
+            isHovered={hoveredCard === index}
+            onHover={setHoveredCard}
           />
-        </ResponsiveContainer>
+        ))}
       </div>
     </motion.div>
   );
 }
 
-function ModernTreemapContent({ onHover, ...props }: any & { onHover: (item: string | null) => void }) {
-  const { depth, x, y, width, height, name, value, color } = props;
-  const [isHovered, setIsHovered] = useState(false);
+function ModernBalanceCard({ 
+  item, 
+  index, 
+  isHovered, 
+  onHover 
+}: { 
+  item: any; 
+  index: number; 
+  isHovered: boolean; 
+  onHover: (index: number | null) => void; 
+}) {
+  // Calculate relative size for dynamic height
+  const maxValue = Math.max(...[37.9, 41.6, 25.2]); // rough max from common data
+  const heightRatio = Math.min(item.value / maxValue * 100, 100);
+  const minHeight = 60;
+  const dynamicHeight = Math.max(minHeight, heightRatio * 3);
 
-  const handleMouseEnter = () => {
-    setIsHovered(true);
-    onHover(name);
+  // Dynamic colors based on value ranges
+  const getCardColor = () => {
+    const colors = [
+      'from-emerald-500 to-teal-600',
+      'from-blue-500 to-cyan-600', 
+      'from-purple-500 to-violet-600',
+      'from-orange-500 to-red-600',
+      'from-indigo-500 to-blue-600'
+    ];
+    return colors[index % colors.length];
   };
-
-  const handleMouseLeave = () => {
-    setIsHovered(false);
-    onHover(null);
-  };
-
-  // Smart color system based on original colors but enhanced
-  const getColors = () => {
-    const originalColor = color || (depth === 1 ? '#374151' : '#06b6d4');
-    
-    if (isHovered) {
-      return {
-        fill: '#0ea5e9', // Bright blue on hover
-        stroke: '#22d3ee', // Cyan stroke
-        textColor: '#ffffff'
-      };
-    }
-    
-    return {
-      fill: originalColor,
-      stroke: '#4b5563', // Subtle gray stroke
-      textColor: '#f8fafc'
-    };
-  };
-
-  const colors = getColors();
 
   return (
-    <g onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave}>
-      {/* Main rectangle */}
-      <motion.rect 
-        x={x} 
-        y={y} 
-        width={width} 
-        height={height}
-        fill={colors.fill}
-        stroke={colors.stroke}
-        strokeWidth={isHovered ? 2 : 1}
-        rx={6}
-        ry={6}
-        style={{ 
-          cursor: 'pointer',
-          filter: isHovered 
-            ? 'drop-shadow(0 8px 25px rgba(14, 165, 233, 0.3)) brightness(1.05)' 
-            : 'drop-shadow(0 2px 8px rgba(0, 0, 0, 0.2))',
-        }}
-        animate={{
-          scale: isHovered ? 1.02 : 1,
-        }}
-        transition={{ 
-          type: "spring", 
-          stiffness: 400, 
-          damping: 30 
-        }}
+    <motion.div
+      className={`relative overflow-hidden rounded-2xl cursor-pointer bg-gradient-to-r ${getCardColor()}`}
+      style={{ height: `${dynamicHeight}px` }}
+      onMouseEnter={() => onHover(index)}
+      onMouseLeave={() => onHover(null)}
+      initial={{ scale: 0.9, opacity: 0 }}
+      animate={{ 
+        scale: isHovered ? 1.05 : 1,
+        opacity: 1,
+        rotateY: isHovered ? 2 : 0,
+        z: isHovered ? 10 : 0
+      }}
+      whileInView={{ scale: 1, opacity: 1 }}
+      transition={{ 
+        type: "spring", 
+        stiffness: 400, 
+        damping: 25,
+        delay: index * 0.1 
+      }}
+      whileHover={{
+        boxShadow: "0 20px 40px -10px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.1)"
+      }}
+    >
+      {/* Glossy overlay */}
+      <motion.div 
+        className="absolute inset-0 bg-gradient-to-br from-white/20 via-white/5 to-transparent"
+        animate={{ opacity: isHovered ? 0.3 : 0.15 }}
+        transition={{ duration: 0.3 }}
       />
       
-      {/* Subtle inner glow on hover */}
-      {isHovered && (
-        <motion.rect
-          x={x + 1}
-          y={y + 1}
-          width={width - 2}
-          height={height - 2}
-          fill="rgba(255, 255, 255, 0.1)"
-          rx={5}
-          ry={5}
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.2 }}
-        />
-      )}
+      {/* Animated background pattern */}
+      <motion.div
+        className="absolute inset-0 opacity-10"
+        animate={{
+          backgroundPosition: isHovered ? "100% 100%" : "0% 0%"
+        }}
+        transition={{ duration: 2, ease: "linear" }}
+        style={{
+          backgroundImage: "linear-gradient(45deg, transparent 30%, rgba(255,255,255,0.1) 50%, transparent 70%)",
+          backgroundSize: "20px 20px"
+        }}
+      />
 
-      {/* Clean, readable text */}
-      {width > 70 && height > 35 && (
-        <motion.g
-          animate={{ 
-            opacity: 1,
-            y: isHovered ? -1 : 0
+      {/* Content */}
+      <motion.div 
+        className="relative z-10 h-full flex flex-col justify-center px-6"
+        animate={{
+          y: isHovered ? -2 : 0
+        }}
+        transition={{ type: "spring", stiffness: 300, damping: 20 }}
+      >
+        <motion.h4 
+          className="text-white font-bold text-lg leading-tight mb-2"
+          animate={{
+            scale: isHovered ? 1.05 : 1,
+            textShadow: isHovered 
+              ? "0 0 20px rgba(255,255,255,0.5)" 
+              : "0 2px 4px rgba(0,0,0,0.3)"
           }}
-          transition={{ type: "spring", stiffness: 300, damping: 25 }}
+          transition={{ duration: 0.2 }}
         >
-          <text 
-            x={x + width / 2} 
-            y={y + height / 2 - 8} 
-            textAnchor="middle" 
-            dominantBaseline="middle"
-            fill={colors.textColor}
-            fontSize={Math.min(width / 8, height / 4, 14)}
-            fontWeight="600"
-            style={{
-              textShadow: '0 1px 3px rgba(0,0,0,0.8)'
-            }}
-          >
-            {name}
-          </text>
-          
-          <text 
-            x={x + width / 2} 
-            y={y + height / 2 + 8} 
-            textAnchor="middle" 
-            dominantBaseline="middle"
-            fill={colors.textColor}
-            fontSize={Math.min(width / 10, height / 5, 12)}
-            fontWeight="500"
-            fillOpacity={0.9}
-            style={{
-              textShadow: '0 1px 2px rgba(0,0,0,0.6)'
-            }}
-          >
-            {value.toFixed(1)}b ₺
-          </text>
-        </motion.g>
-      )}
-    </g>
+          {item.name}
+        </motion.h4>
+        
+        <motion.div 
+          className="flex items-baseline gap-2"
+          animate={{
+            x: isHovered ? 4 : 0
+          }}
+          transition={{ type: "spring", stiffness: 400, damping: 25 }}
+        >
+          <span className="text-white/90 font-bold text-2xl">
+            {item.value.toFixed(1)}
+          </span>
+          <span className="text-white/70 font-medium text-sm">
+            milyar ₺
+          </span>
+        </motion.div>
+
+        {/* Progress indicator */}
+        <motion.div 
+          className="absolute bottom-0 left-0 h-1 bg-white/30 rounded-full"
+          initial={{ width: "0%" }}
+          animate={{ 
+            width: isHovered ? "100%" : `${Math.min(heightRatio, 100)}%`
+          }}
+          transition={{ duration: 0.8, ease: "easeOut" }}
+        />
+      </motion.div>
+
+      {/* Floating accent dot */}
+      <motion.div
+        className="absolute top-4 right-4 w-2 h-2 bg-white/60 rounded-full"
+        animate={{
+          scale: isHovered ? [1, 1.5, 1] : 1,
+          opacity: isHovered ? [0.6, 1, 0.6] : 0.6
+        }}
+        transition={{
+          scale: { duration: 1.5, repeat: Infinity },
+          opacity: { duration: 1.5, repeat: Infinity }
+        }}
+      />
+    </motion.div>
   );
 }
 
