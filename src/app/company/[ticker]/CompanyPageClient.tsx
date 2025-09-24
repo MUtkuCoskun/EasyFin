@@ -2,7 +2,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
-import { motion, useInView, useMotionValue, useSpring, useMotionValueEvent } from "framer-motion";
+import { motion, useInView, useMotionValue, useSpring } from "framer-motion";
 
 import {
   FiInfo, FiBarChart2, FiPieChart, FiTrendingUp,
@@ -13,8 +13,12 @@ import { Treemap, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cel
 type PageData = {
   ticker: string;
   generalInfo: any;
-  valuationRatios: any; // { pe, pb, ps, evEbitda, netDebtEbitda }
-  balanceSheet: { assets: any[]; liabilities: any[] };
+  valuationRatios: any; // { pe, pb, ps, evEbitda, netDebtEbitda, ... }
+  balanceSheet: {
+    assetsItems: Array<{ name: string; value: number }>;
+    liabilitiesItems: Array<{ name: string; value: number }>;
+    equityItems: Array<{ name: string; value: number }>;
+  };
   incomeStatement: any;
   cashFlow: any[];
   ownership: any;
@@ -24,6 +28,11 @@ type PageData = {
 function fmtMoney(n: number | null | undefined) {
   if (n == null || !isFinite(n)) return "–";
   return new Intl.NumberFormat("tr-TR", { notation: "compact", maximumFractionDigits: 2 }).format(n);
+}
+function fmtBnTry(n: number | null | undefined) {
+  if (n == null || !isFinite(n)) return "–";
+  const bn = n / 1e9;
+  return `${bn.toFixed(bn >= 10 ? 0 : 1)} milyar ₺`;
 }
 
 /* ================================
@@ -88,7 +97,7 @@ function clamp(v: number, min: number, max: number) {
 }
 
 function ModernRatioCard({
-  oran, min, max, baslik, ipucu, gradient, shadowColor, dataLabel
+  oran, min, max, baslik, ipucu, gradient, shadowColor
 }: {
   oran: number | null;
   min: number;
@@ -97,7 +106,6 @@ function ModernRatioCard({
   ipucu: string;
   gradient: string;
   shadowColor: string;
-  dataLabel: string;
 }) {
   const [isHovered, setIsHovered] = useState(false);
   const [mousePos, setMousePos] = useState({ x: 0.5, y: 0.5 });
@@ -300,10 +308,8 @@ function ModernRatioCard({
             </div>
           </div>
 
-          {/* Data Labels - Empty Space */}
-          <div className="flex items-center justify-center h-8">
-            {/* Empty space where labels used to be */}
-          </div>
+          {/* Spacer */}
+          <div className="flex items-center justify-center h-8" />
         </div>
 
         {/* Hover Overlay */}
@@ -331,7 +337,6 @@ function DegerlemePanel3D({ ratios }: { ratios: any }) {
             ipucu={m.ipucu}
             gradient={m.gradient}
             shadowColor={m.shadowColor}
-            dataLabel={m.dataLabel}
           />
         ))}
       </div>
@@ -340,7 +345,87 @@ function DegerlemePanel3D({ ratios }: { ratios: any }) {
 }
 
 /* ================================
-   Sayfanın geri kalanı
+   Bilanço – 3 sütun (ilk 4 + Diğer)
+   ================================ */
+
+type KV = { name: string; value: number };
+
+function top4PlusOther(items: KV[]): KV[] {
+  const list = (items || [])
+    .filter(it => it && isFinite(it.value) && it.value > 0)
+    .sort((a,b) => b.value - a.value);
+
+  if (list.length <= 5) return list;
+  const top4 = list.slice(0,4);
+  const otherSum = list.slice(4).reduce((s, x) => s + x.value, 0);
+  return [...top4, { name: "Diğer", value: otherSum }];
+}
+
+const SEG_COLORS = [
+  "from-emerald-500 to-teal-600",
+  "from-blue-500 to-cyan-600",
+  "from-violet-500 to-fuchsia-600",
+  "from-amber-500 to-orange-600",
+  "from-slate-500 to-gray-600",
+];
+
+function TripleBalanceTreemap({
+  assets, liabilities, equity
+}: {
+  assets: KV[]; liabilities: KV[]; equity: KV[];
+}) {
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-6">
+      <StackedRect title="Varlıklar" items={assets} />
+      <StackedRect title="Yükümlülükler" items={liabilities} />
+      <StackedRect title="Özkaynaklar" items={equity} />
+    </div>
+  );
+}
+
+function StackedRect({ title, items }: { title: string; items: KV[] }) {
+  const top5 = top4PlusOther(items);
+  const total = top5.reduce((s, x) => s + x.value, 0);
+
+  return (
+    <div className="bg-gray-800/40 backdrop-blur-sm p-4 rounded-2xl border border-gray-700/40">
+      <h3 className="text-lg font-bold text-white mb-3">{title}</h3>
+      <div className="relative rounded-xl overflow-hidden border border-white/10 bg-gray-900/40"
+           style={{ height: 420 }}>
+        {total <= 0 ? (
+          <div className="absolute inset-0 flex items-center justify-center text-gray-500">
+            Veri Bekleniyor
+          </div>
+        ) : (
+          <div className="flex flex-col h-full">
+            {top5.map((it, i) => {
+              const hPct = (it.value / total) * 100;
+              return (
+                <div key={i}
+                     className={`relative bg-gradient-to-r ${SEG_COLORS[i % SEG_COLORS.length]} 
+                                 border-b border-white/10 last:border-b-0`}
+                     style={{ height: `${hPct}%` }}>
+                  <div className="absolute inset-0 p-3 flex items-end">
+                    <div className="w-full flex items-center justify-between gap-2
+                                    bg-black/20 backdrop-blur-[1px] rounded-md px-2 py-1">
+                      <span className="text-white text-sm font-semibold truncate">{it.name}</span>
+                      <span className="text-white text-xs opacity-90">
+                        {fmtBnTry(it.value)} <span className="opacity-75">({hPct.toFixed(0)}%)</span>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ================================
+   Sayfanın geri kalanı (mevcut)
    ================================ */
 
 export default function CompanyPageClient({ data }: { data: PageData }) {
@@ -395,13 +480,14 @@ export default function CompanyPageClient({ data }: { data: PageData }) {
           <DegerlemePanel3D ratios={valuationRatios} />
         </AnimatedSection>
 
-        {/* BİLANÇO */}
+        {/* BİLANÇO – 3 Sütun, ilk4 + Diğer */}
         <AnimatedSection id="bilanco" setActive={setActiveSection}>
-          <SectionHeader title="Bilanço Yapısı" subtitle="Varlık ve yükümlülüklerin dağılımı" />
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mt-6 h-[500px]">
-            <BalanceSheetTreemap title="Varlıklar" data={balanceSheet.assets} />
-            <BalanceSheetTreemap title="Yükümlülükler + Özkaynaklar" data={balanceSheet.liabilities} />
-          </div>
+          <SectionHeader title="Bilanço Yapısı" subtitle="Varlıklar • Yükümlülükler • Özkaynaklar" />
+          <TripleBalanceTreemap
+            assets={balanceSheet.assetsItems}
+            liabilities={balanceSheet.liabilitiesItems}
+            equity={balanceSheet.equityItems}
+          />
         </AnimatedSection>
 
         {/* GELİR TABLOSU */}
@@ -453,7 +539,7 @@ export default function CompanyPageClient({ data }: { data: PageData }) {
   );
 }
 
-/* === Yardımcı parçalar === */
+/* === Yardımcı parçalar (mevcut + ufak dokunuşlar) === */
 
 function AnimatedSection({ id, setActive, children }: { id: string; setActive: (id: string) => void; children: React.ReactNode; }) {
   const ref = useRef(null);
@@ -498,187 +584,7 @@ function InfoCard({ title, value, isSmall = false, isLink = false }: { title: st
   );
 }
 
-function BalanceSheetTreemap({ title, data }: { title: string; data: any[]; }) {
-  const [hoveredCard, setHoveredCard] = useState<number | null>(null);
-
-  return (
-    <motion.div 
-      className="bg-gray-800/40 backdrop-blur-sm p-6 rounded-2xl border border-gray-700/30 w-full h-full flex flex-col relative overflow-hidden"
-      initial={{ opacity: 0, y: 20 }}
-      whileInView={{ opacity: 1, y: 0 }}
-      viewport={{ once: true }}
-      transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
-    >
-      {/* Subtle background gradient */}
-      <motion.div
-        className="absolute inset-0 bg-gradient-to-br from-white/[0.03] to-transparent rounded-2xl"
-        animate={{ opacity: hoveredCard !== null ? 0.8 : 0.5 }}
-        transition={{ duration: 0.3 }}
-      />
-
-      <motion.h3 
-        className="text-lg font-bold text-white mb-4 relative z-10"
-        animate={{ 
-          x: hoveredCard !== null ? 4 : 0,
-          color: hoveredCard !== null ? "#22d3ee" : "#ffffff"
-        }}
-        transition={{ type: "spring", stiffness: 300, damping: 25 }}
-      >
-        {title}
-      </motion.h3>
-      
-      <div className="flex-1 flex flex-col gap-3 relative z-10">
-        {data.map((item, index) => (
-          <ModernBalanceCard
-            key={item.name}
-            item={item}
-            index={index}
-            isHovered={hoveredCard === index}
-            onHover={setHoveredCard}
-            totalItems={data.length}
-          />
-        ))}
-      </div>
-    </motion.div>
-  );
-}
-
-function ModernBalanceCard({ 
-  item, 
-  index, 
-  isHovered, 
-  onHover,
-  totalItems
-}: { 
-  item: any; 
-  index: number; 
-  isHovered: boolean; 
-  onHover: (index: number | null) => void; 
-  totalItems: number;
-}) {
-  // Calculate flex-grow based on value to create proportional heights
-  const maxValue = Math.max(...[100, 50, 30]); // rough estimation for proportions
-  const flexGrow = Math.max(item.value / maxValue, 0.3); // minimum 0.3 for readability
-
-  // Dynamic colors based on index
-  const getCardColor = () => {
-    const colors = [
-      'from-emerald-500 to-teal-600',
-      'from-blue-500 to-cyan-600', 
-      'from-purple-500 to-violet-600',
-      'from-orange-500 to-red-600',
-      'from-indigo-500 to-blue-600'
-    ];
-    return colors[index % colors.length];
-  };
-
-  return (
-    <motion.div
-      className={`relative overflow-hidden rounded-xl cursor-pointer bg-gradient-to-r ${getCardColor()}`}
-      style={{ flexGrow }}
-      onMouseEnter={() => onHover(index)}
-      onMouseLeave={() => onHover(null)}
-      initial={{ scale: 0.95, opacity: 0, x: -20 }}
-      animate={{ 
-        scale: isHovered ? 1.03 : 1,
-        opacity: 1,
-        x: 0,
-        rotateY: isHovered ? 1 : 0,
-        z: isHovered ? 5 : 0
-      }}
-      whileInView={{ scale: 1, opacity: 1, x: 0 }}
-      transition={{ 
-        type: "spring", 
-        stiffness: 400, 
-        damping: 25,
-        delay: index * 0.1 
-      }}
-      whileHover={{
-        boxShadow: "0 10px 25px -5px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.1)"
-      }}
-    >
-      {/* Glossy overlay */}
-      <motion.div 
-        className="absolute inset-0 bg-gradient-to-br from-white/20 via-white/5 to-transparent"
-        animate={{ opacity: isHovered ? 0.3 : 0.15 }}
-        transition={{ duration: 0.3 }}
-      />
-      
-      {/* Animated background pattern */}
-      <motion.div
-        className="absolute inset-0 opacity-10"
-        animate={{
-          backgroundPosition: isHovered ? "100% 100%" : "0% 0%"
-        }}
-        transition={{ duration: 1.5, ease: "linear" }}
-        style={{
-          backgroundImage: "linear-gradient(45deg, transparent 30%, rgba(255,255,255,0.1) 50%, transparent 70%)",
-          backgroundSize: "15px 15px"
-        }}
-      />
-
-      {/* Content */}
-      <motion.div 
-        className="relative z-10 h-full flex flex-col justify-center px-4 py-3 min-h-[60px]"
-        animate={{
-          y: isHovered ? -1 : 0
-        }}
-        transition={{ type: "spring", stiffness: 300, damping: 20 }}
-      >
-        <motion.h4 
-          className="text-white font-bold text-sm leading-tight mb-1"
-          animate={{
-            scale: isHovered ? 1.02 : 1,
-            textShadow: isHovered 
-              ? "0 0 15px rgba(255,255,255,0.4)" 
-              : "0 1px 3px rgba(0,0,0,0.3)"
-          }}
-          transition={{ duration: 0.2 }}
-        >
-          {item.name}
-        </motion.h4>
-        
-        <motion.div 
-          className="flex items-baseline gap-1"
-          animate={{
-            x: isHovered ? 2 : 0
-          }}
-          transition={{ type: "spring", stiffness: 400, damping: 25 }}
-        >
-          <span className="text-white font-bold text-lg">
-            {item.value.toFixed(1)}
-          </span>
-          <span className="text-white/80 font-medium text-xs">
-            milyar ₺
-          </span>
-        </motion.div>
-
-        {/* Progress indicator */}
-        <motion.div 
-          className="absolute bottom-0 left-0 h-0.5 bg-white/30 rounded-full"
-          initial={{ width: "0%" }}
-          animate={{ 
-            width: isHovered ? "100%" : "70%"
-          }}
-          transition={{ duration: 0.6, ease: "easeOut" }}
-        />
-      </motion.div>
-
-      {/* Floating accent dot */}
-      <motion.div
-        className="absolute top-2 right-2 w-1.5 h-1.5 bg-white/60 rounded-full"
-        animate={{
-          scale: isHovered ? [1, 1.3, 1] : 1,
-          opacity: isHovered ? [0.6, 1, 0.6] : 0.6
-        }}
-        transition={{
-          scale: { duration: 1.2, repeat: Infinity },
-          opacity: { duration: 1.2, repeat: Infinity }
-        }}
-      />
-    </motion.div>
-  );
-}
+// (Eski treemap bileşeni projede kalabilir; kullanılmıyor ama istersen silebilirsin)
 
 function IncomeSankeyChart({ data }: { data: any; }) {
   const sankeyData = {

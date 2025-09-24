@@ -100,7 +100,6 @@ function mapPricesByKeyField(rows: any[]): Record<string, any> {
 // --------- DASH HELPERS (Firestore map → rows & latest-period pick) ----------
 function dashRowsFromDoc(doc: any): any[] {
   if (!doc) return [];
-  // bazen { header, rows } olabilir; bazen doğrudan field map (1:{...}, 2:{...})
   if (Array.isArray(doc.rows)) return doc.rows;
   if (Array.isArray(doc)) return doc;
   return Object.values(doc);
@@ -211,6 +210,17 @@ export async function generateMetadata({
   };
 }
 
+// === küçük yardımcı: bilanço kalemi toparlayıcı ===
+function pickVal(
+  codes: Record<string, any>,
+  code: string,
+  periods: string[],
+  nameTR: string
+) {
+  const v = latestNonEmpty(codes[code], periods);
+  return v != null ? { key: code, name: nameTR, value: v } : null;
+}
+
 // --------- PAGE (SERVER) ----------
 export default async function CompanyPage({ params }: { params: { ticker: string } }) {
   const ticker = (params?.ticker || "").toUpperCase();
@@ -286,7 +296,6 @@ export default async function CompanyPage({ params }: { params: { ticker: string
   const depAmort     = codes["4B"];
 
   // Dash öncelikli (varsa), yoksa FIN'den
-  
   const lastRevenue  = dashLatest(dashRows, "Dash2","Satış Gelirleri") ?? latestNonEmpty(netSales, periods);
   const lastCOGS     = dashLatest(dashRows, "Dash3","Satışların Maliyeti (-)") ?? latestNonEmpty(costOfSales, periods);
   const lastGross    = dashLatest(dashRows, "Dash4","BRÜT KAR (ZARAR)") ?? latestNonEmpty(grossProfit, periods);
@@ -324,6 +333,50 @@ export default async function CompanyPage({ params }: { params: { ticker: string
       ? Math.max(currLiab + nonCurrLiab - totalDebt, 0)
       : null;
 
+  // --------- Balance Breakdown (top4 + OTHER için zengin havuz) ----------
+  const assetsItemsRaw = [
+    pickVal(codes, "1AA", periods, "Nakit ve Benzerleri"),
+    pickVal(codes, "1AB", periods, "KV Finansal Yatırımlar"),
+    pickVal(codes, "1AC", periods, "Ticari Alacaklar (KV)"),
+    pickVal(codes, "1AF", periods, "Stoklar"),
+    pickVal(codes, "1AH", periods, "Diğer Dönen Varlıklar"),
+    pickVal(codes, "1BG", periods, "Maddi Duran Varlıklar"),
+    pickVal(codes, "1BH", periods, "Maddi Olmayan Duran Varlıklar"),
+    pickVal(codes, "1BC", periods, "UV Finansal Yatırımlar"),
+    pickVal(codes, "1BD", periods, "Özkaynak Yöntemi Yatırımları"),
+    pickVal(codes, "1BF", periods, "Yatırım Amaçlı Gayrimenkuller"),
+    pickVal(codes, "1BJ", periods, "Ertelenmiş Vergi Varlığı"),
+    pickVal(codes, "1BK", periods, "Diğer Duran Varlıklar"),
+  ].filter(Boolean) as Array<{key:string; name:string; value:number}>;
+
+  const stOther = (currLiab != null && stDebt != null) ? Math.max(currLiab - stDebt, 0) : null;
+  const ltOther = (nonCurrLiab != null && ltDebt != null) ? Math.max(nonCurrLiab - ltDebt, 0) : null;
+
+  const liabilitiesItemsRaw = [
+    pickVal(codes, "2AA", periods, "KV Finansal Borçlar"),
+    stOther != null ? { key: "2A_OTHER", name: "Diğer Kısa Vadeli Yük.", value: stOther } : null,
+    pickVal(codes, "2BA", periods, "UV Finansal Borçlar"),
+    ltOther != null ? { key: "2B_OTHER", name: "Diğer Uzun Vadeli Yük.", value: ltOther } : null,
+    pickVal(codes, "2AAGAA", periods, "Ticari Borçlar (KV)"),
+    pickVal(codes, "2BBA", periods, "Ticari Borçlar (UV)"),
+    pickVal(codes, "2BF", periods, "Kıdem Tazm. ve Benzeri Karş."),
+    pickVal(codes, "2BG", periods, "Ertelenmiş Vergi Yük."),
+    pickVal(codes, "2BH", periods, "Diğer Uzun Vadeli Yük."),
+  ].filter(Boolean) as Array<{key:string; name:string; value:number}>;
+
+  const equityItemsRaw = [
+    pickVal(codes, "2OA",  periods, "Ödenmiş Sermaye"),
+    pickVal(codes, "2OCE", periods, "Geçmiş Yıllar K/Z"),
+    pickVal(codes, "2OCF", periods, "Dönem Net K/Z"),
+    pickVal(codes, "2OCB", periods, "Değer Artış Fonları"),
+    pickVal(codes, "2Oca", periods, "Hisse Senedi İhraç Primleri"),
+    pickVal(codes, "2OD",  periods, "Diğer Özsermaye Kalemleri"),
+  ].filter(Boolean) as Array<{key:string; name:string; value:number}>;
+
+  if (!equityItemsRaw.length && equity != null) {
+    equityItemsRaw.push({ key: "2O", name: "Özkaynaklar", value: equity });
+  }
+
   // ---------- TTM ----------
   const ttmSales   = sumLastN(netSales, periods, 4);
   const ttmDep     = sumLastN(depAmort, periods, 4);
@@ -340,10 +393,9 @@ export default async function CompanyPage({ params }: { params: { ticker: string
   const netDebt = (stDebt ?? 0) + (ltDebt ?? 0) - (cash ?? 0);
 
   // ---------- Değerleme (yalnız DASH; en yeni dönem) ----------
-  // Not: Kodlar projedeki yeni mapping: Dash31..Dash35. Eski exportlarda Dash25 olabilir (F/K).
   const pe        = dashLatest(dashRows, "Dash25", "F/K");
   const pb        = dashLatest(dashRows, "Dash26", "PD/DD");
-  const ps   = dashLatest(dashRows, "Dash27", "FD/Satışlar", "FD/Satış");
+  const ps        = dashLatest(dashRows, "Dash27", "FD/Satışlar", "FD/Satış");
   const evEbitda  = dashLatest(dashRows, "Dash28", "FD/FAVÖK");
   const ndEbitda  = dashLatest(dashRows, "Dash29", "Net Borç/FAVÖK");
 
@@ -402,19 +454,6 @@ export default async function CompanyPage({ params }: { params: { ticker: string
     dashLatest(dashRows, "DashFCF", "Serbest Nakit Akım") ??
     ((lastNI ?? 0) + (lastDep ?? 0) + wNWC + wOth);
 
-  // ---------- Treemap arrays (₺ bn) ----------
-  const toB = (x: number | null) => (x == null ? 0 : x / 1e9);
-  const assetsArr = [
-    { name: "Nakit + KV Yat.", value: toB(cash), color: "#14b8a6" },
-    { name: "Alacaklar", value: toB(receivables), color: "#22d3ee" },
-    { name: "Stoklar", value: toB(inventory), color: "#0ea5e9" },
-  ].filter((d) => d.value > 0);
-  const liabArr = [
-    { name: "Özkaynaklar", value: toB(equity ?? 0), color: "#60a5fa" },
-    { name: "Toplam Borç", value: toB((stDebt ?? 0) + (ltDebt ?? 0)), color: "#ef4444" },
-    ...(otherLiab != null ? [{ name: "Diğer Yük.", value: toB(otherLiab), color: "#f59e0b" }] : []),
-  ].filter((d) => d.value > 0);
-
   // ---- Build page data ----
   const pageData = {
     ticker,
@@ -430,16 +469,17 @@ export default async function CompanyPage({ params }: { params: { ticker: string
     valuationRatios: {
       pe,
       pb,
-      ps,       // UI'da "Fiyat/Satış" yazıyorsa etiketi güncelle veya PS için ayrı satır ekle
+      ps,
       evEbitda,
       netDebtEbitda: ndEbitda,
-       earnings: ttmNI,      // Yıllıklandırılmış Net Kâr
-    bookValue: equity,    // Son dönem Özkaynaklar (Defter Değeri)
-    sales: ttmSales       // Yıllıklandırılmış Satışlar
+      earnings: ttmNI,      // Yıllıklandırılmış Net Kâr
+      bookValue: equity,    // Son dönem Özkaynaklar (Defter Değeri)
+      sales: ttmSales       // Yıllıklandırılmış Satışlar
     },
     balanceSheet: {
-      assets: assetsArr,
-      liabilities: liabArr,
+      assetsItems: assetsItemsRaw,
+      liabilitiesItems: liabilitiesItemsRaw,
+      equityItems: equityItemsRaw,
     },
     incomeStatement: {
       revenue: lastRevenue,
