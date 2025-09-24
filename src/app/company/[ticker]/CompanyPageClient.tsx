@@ -1,4 +1,6 @@
+// ==========================
 // src/app/company/[ticker]/CompanyPageClient.tsx
+// ==========================
 "use client";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
@@ -10,18 +12,27 @@ import {
 } from "react-icons/fi";
 import { Treemap, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, PieChart, Pie } from "recharts";
 
+type KV = { name: string; value: number };
+
 type PageData = {
   ticker: string;
   generalInfo: any;
   valuationRatios: any; // { pe, pb, ps, evEbitda, netDebtEbitda, ... }
   balanceSheet: {
-    assetsItems: Array<{ name: string; value: number }>;
-    liabilitiesItems: Array<{ name: string; value: number }>;
-    equityItems: Array<{ name: string; value: number }>;
+    // eski alanlar (fallback)
+    assetsItems?: Array<{ name: string; value: number }>;
+    liabilitiesItems?: Array<{ name: string; value: number }>;
+    equityItems?: Array<{ name: string; value: number }>;
+    // yeni alanlar
+    currentAssets?: KV[];
+    nonCurrentAssets?: KV[];
+    shortTermLiabilities?: KV[];
+    longTermLiabilities?: KV[];
+    equityGrouped?: KV[];
   };
   incomeStatement: any;
   cashFlow: any[];
-  ownership: any;
+  ownership: { shareholders: any[]; subsidiaries: string[] };
   management: { name: string; position: string }[];
 };
 
@@ -48,7 +59,6 @@ const METRICS = [
     max: 40,
     gradient: "from-cyan-400 via-blue-500 to-purple-600",
     shadowColor: "rgba(14, 165, 233, 0.4)",
-    dataLabel: "HBK - Net Kar"
   },
   { 
     key: "pb", 
@@ -58,7 +68,6 @@ const METRICS = [
     max: 8,
     gradient: "from-emerald-400 via-teal-500 to-cyan-600",
     shadowColor: "rgba(16, 185, 129, 0.4)",
-    dataLabel: "Piyasa Değeri - Defter Değeri"
   },
   { 
     key: "ps", 
@@ -68,7 +77,6 @@ const METRICS = [
     max: 12,
     gradient: "from-purple-400 via-pink-500 to-rose-600",
     shadowColor: "rgba(168, 85, 247, 0.4)",
-    dataLabel: "Piyasa Değeri - Satışlar"
   },
   { 
     key: "evEbitda", 
@@ -78,7 +86,6 @@ const METRICS = [
     max: 25,
     gradient: "from-orange-400 via-red-500 to-pink-600",
     shadowColor: "rgba(249, 115, 22, 0.4)",
-    dataLabel: "Firma Değeri - FAVÖK"
   },
   { 
     key: "netDebtEbitda", 
@@ -88,7 +95,6 @@ const METRICS = [
     max: 8,
     gradient: "from-indigo-400 via-purple-500 to-fuchsia-600",
     shadowColor: "rgba(99, 102, 241, 0.4)",
-    dataLabel: "Net Borç - FAVÖK"
   },
 ] as const;
 
@@ -189,30 +195,6 @@ function ModernRatioCard({
           }}
           transition={{ duration: 1.2, ease: [0.25, 0.46, 0.45, 0.94] }}
         />
-
-        {/* Floating Orbs */}
-        <div className="absolute inset-0 overflow-hidden">
-          <motion.div
-            className={`absolute top-4 right-4 w-16 h-16 bg-gradient-to-br ${gradient} rounded-full blur-xl opacity-25`}
-            animate={{
-              x: isHovered ? mousePos.x * 12 : 0,
-              y: isHovered ? mousePos.y * 12 : 0,
-              scale: isHovered ? 1.3 : 1,
-              opacity: isHovered ? 0.35 : 0.25,
-            }}
-            transition={{ type: "spring", stiffness: 120, damping: 20 }}
-          />
-          <motion.div
-            className={`absolute bottom-6 left-6 w-12 h-12 bg-gradient-to-br ${gradient} rounded-full blur-lg opacity-15`}
-            animate={{
-              x: isHovered ? -mousePos.x * 10 : 0,
-              y: isHovered ? -mousePos.y * 10 : 0,
-              scale: isHovered ? 1.4 : 1,
-              opacity: isHovered ? 0.25 : 0.15,
-            }}
-            transition={{ type: "spring", stiffness: 150, damping: 25 }}
-          />
-        </div>
 
         {/* Content */}
         <div className="relative z-10 h-full flex flex-col justify-between p-6">
@@ -345,12 +327,12 @@ function DegerlemePanel3D({ ratios }: { ratios: any }) {
 }
 
 /* ================================
-   Bilanço – 3 sütun (ilk 4 + Diğer) - GÜNCELLENMİŞ
+   Bilanço – 3 sütun (eski) + 5 sütun (yeni)
    ================================ */
 
-type KV = { name: string; value: number };
+type KV2 = { name: string; value: number };
 
-function top4PlusOther(items: KV[]): KV[] {
+function top4PlusOther(items: KV2[]): KV2[] {
   const list = (items || [])
     .filter(it => it && isFinite(it.value) && it.value > 0)
     .sort((a,b) => b.value - a.value);
@@ -369,21 +351,7 @@ const SEG_COLORS = [
   "from-slate-500 to-gray-600",
 ];
 
-function TripleBalanceTreemap({
-  assets, liabilities, equity
-}: {
-  assets: KV[]; liabilities: KV[]; equity: KV[];
-}) {
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-6">
-      <StackedRect title="Varlıklar" items={assets} />
-      <StackedRect title="Yükümlülükler" items={liabilities} />
-      <StackedRect title="Özkaynaklar" items={equity} />
-    </div>
-  );
-}
-
-function StackedRect({ title, items }: { title: string; items: KV[] }) {
+function StackedRect({ title, items }: { title: string; items: KV2[] }) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const top5 = top4PlusOther(items);
   const total = top5.reduce((s, x) => s + x.value, 0);
@@ -420,7 +388,6 @@ function StackedRect({ title, items }: { title: string; items: KV[] }) {
                     }}
                     transition={{ type: "spring", stiffness: 300, damping: 30 }}
                   >
-                    {/* Minimal görünüm - sadece isim */}
                     <div className="absolute inset-0 p-2 flex items-center justify-center">
                       <div className="text-center">
                         <span className="text-white text-sm font-semibold block truncate max-w-32">
@@ -434,7 +401,6 @@ function StackedRect({ title, items }: { title: string; items: KV[] }) {
                       </div>
                     </div>
 
-                    {/* Hover overlay ile parlaklık efekti */}
                     <motion.div
                       className="absolute inset-0 bg-white/20 pointer-events-none"
                       initial={{ opacity: 0 }}
@@ -446,7 +412,6 @@ function StackedRect({ title, items }: { title: string; items: KV[] }) {
               })}
             </div>
 
-            {/* Hover detay paneli */}
             {hoveredIndex !== null && (
               <motion.div
                 className="absolute top-2 right-2 bg-black/80 backdrop-blur-md rounded-lg p-3 border border-white/20 z-20 min-w-48"
@@ -471,8 +436,6 @@ function StackedRect({ title, items }: { title: string; items: KV[] }) {
                     </div>
                   </div>
                 </div>
-
-                {/* Küçük ok işareti */}
                 <div className="absolute -left-1 top-1/2 transform -translate-y-1/2 w-2 h-2 bg-black/80 border-l border-t border-white/20 rotate-45"></div>
               </motion.div>
             )}
@@ -480,7 +443,6 @@ function StackedRect({ title, items }: { title: string; items: KV[] }) {
         )}
       </div>
 
-      {/* Alt kısımda özet bilgi */}
       <div className="mt-3 text-center">
         <p className="text-xs text-gray-400">
           Toplam: <span className="font-semibold text-cyan-400">{fmtBnTry(total)}</span>
@@ -490,8 +452,72 @@ function StackedRect({ title, items }: { title: string; items: KV[] }) {
   );
 }
 
+function TripleBalanceTreemap({
+  assets, liabilities, equity
+}: {
+  assets: KV2[]; liabilities: KV2[]; equity: KV2[];
+}) {
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-6">
+      <StackedRect title="Varlıklar" items={assets} />
+      <StackedRect title="Yükümlülükler" items={liabilities} />
+      <StackedRect title="Özkaynaklar" items={equity} />
+    </div>
+  );
+}
+
+// DEĞİŞTİR — implicit any fix
+function BalanceGroup(props: { title: string; items?: KV[] }) {
+  const { title, items = [] } = props;
+  const total = items.reduce((s, x) => s + (x?.value || 0), 0);
+  return (
+    <div className="bg-gray-800/40 p-4 rounded-2xl border border-gray-700/40">
+      <h3 className="text-lg font-bold text-white mb-3">{title}</h3>
+      <div className="relative rounded-xl overflow-hidden border border-white/10 bg-gray-900/40" style={{ height: 360 }}>
+        {total <= 0 ? (
+          <div className="absolute inset-0 flex items-center justify-center text-gray-500">Veri Bekleniyor</div>
+        ) : (
+          <div className="flex flex-col h-full">
+            {items.map((it, i) => {
+              const pct = total > 0 ? (it.value / total) * 100 : 0;
+              return (
+                <div
+                  key={i}
+                  className={`relative bg-gradient-to-r ${SEG_COLORS[i%SEG_COLORS.length]} border-b border-white/10 last:border-b-0`}
+                  style={{ height: `${Math.max(pct, 0)}%` }}
+                >
+                  <div className="absolute inset-0 p-2 flex items-center justify-center">
+                    <div className="text-center">
+                      <span className="text-white text-sm font-semibold block truncate max-w-40">{it.name}</span>
+                      {pct >= 15 && <span className="text-white/80 text-xs block mt-1">{pct.toFixed(0)}%</span>}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+      <div className="mt-3 text-center text-xs text-gray-400">
+        Toplam: <span className="font-semibold text-cyan-400">{fmtBnTry(total)}</span>
+      </div>
+    </div>
+  );
+}
+function BalanceGrid5({ bs }: { bs: PageData["balanceSheet"] }) {
+  return (
+    <div className="grid grid-cols-1 xl:grid-cols-5 gap-6 mt-6">
+      <BalanceGroup title="Dönen Varlıklar"           items={bs.currentAssets} />
+      <BalanceGroup title="Duran Varlıklar"           items={bs.nonCurrentAssets} />
+      <BalanceGroup title="Kısa Vadeli Yükümlülükler" items={bs.shortTermLiabilities} />
+      <BalanceGroup title="Uzun Vadeli Yükümlülükler" items={bs.longTermLiabilities} />
+      <BalanceGroup title="Özkaynaklar"               items={bs.equityGrouped} />
+    </div>
+  );
+}
+
 /* ================================
-   Sayfanın geri kalanı (mevcut)
+   Sayfa
    ================================ */
 
 export default function CompanyPageClient({ data }: { data: PageData }) {
@@ -546,14 +572,17 @@ export default function CompanyPageClient({ data }: { data: PageData }) {
           <DegerlemePanel3D ratios={valuationRatios} />
         </AnimatedSection>
 
-        {/* BİLANÇO – 3 Sütun, ilk4 + Diğer - GÜNCELLENMİŞ */}
+        {/* BİLANÇO – YENİ (varsa) yoksa eski fallback */}
         <AnimatedSection id="bilanco" setActive={setActiveSection}>
-          <SectionHeader title="Bilanço Yapısı" subtitle="Varlıklar • Yükümlülükler • Özkaynaklar" />
-          <TripleBalanceTreemap
-            assets={balanceSheet.assetsItems}
-            liabilities={balanceSheet.liabilitiesItems}
-            equity={balanceSheet.equityItems}
-          />
+          <SectionHeader title="Bilanço Yapısı" subtitle="Dönen/Duran • Kısa/Uzun • Özkaynaklar" />
+          {(balanceSheet.currentAssets && balanceSheet.nonCurrentAssets && balanceSheet.shortTermLiabilities && balanceSheet.longTermLiabilities && balanceSheet.equityGrouped)
+            ? <BalanceGrid5 bs={balanceSheet} />
+            : <TripleBalanceTreemap
+                assets={balanceSheet.assetsItems || []}
+                liabilities={balanceSheet.liabilitiesItems || []}
+                equity={balanceSheet.equityItems || []}
+              />
+          }
         </AnimatedSection>
 
         {/* GELİR TABLOSU */}
@@ -564,7 +593,7 @@ export default function CompanyPageClient({ data }: { data: PageData }) {
 
         {/* NAKİT AKIŞI */}
         <AnimatedSection id="nakit-akis" setActive={setActiveSection}>
-          <SectionHeader title="Serbest Nakit Akışı Analizi" subtitle="Kârdan serbest nakit akışına" />
+          <SectionHeader title="Serbest Nakit Akışı Analizi" subtitle="Kârdan serbest nakite" />
           <CashFlowWaterfallChart data={cashFlow.filter(item => item.value != null)} />
         </AnimatedSection>
 
@@ -605,7 +634,7 @@ export default function CompanyPageClient({ data }: { data: PageData }) {
   );
 }
 
-/* === Yardımcı parçalar (mevcut + ufak dokunuşlar) === */
+/* === Yardımcı parçalar === */
 
 function AnimatedSection({ id, setActive, children }: { id: string; setActive: (id: string) => void; children: React.ReactNode; }) {
   const ref = useRef(null);
@@ -662,15 +691,14 @@ function IncomeSankeyChart({ data }: { data: any; }) {
     <div className="mt-8 p-6 bg-gray-800/50 rounded-2xl border border-gray-700/50">
       <div className="flex items-center justify-between space-x-4 text-center">
         <div className="w-1/5"><SankeyNode {...sankeyData.revenue} color="bg-cyan-500" /></div>
-        <div className="w-1/5 flex flex-col items-center"><SankeyNode {...sankeyData.cost} color="bg-orange-500" /></div>
+        <div className="w-1/5"><SankeyNode {...sankeyData.cost} color="bg-orange-500" /></div>
         <div className="w-1/5"><SankeyNode {...sankeyData.grossProfit} color="bg-emerald-500" /></div>
-        <div className="w-1/5 flex items-center justify-center"><SankeyNode {...sankeyData.expenses} color="bg-red-500" /></div>
+        <div className="w-1/5"><SankeyNode {...sankeyData.expenses} color="bg-red-500" /></div>
         <div className="w-1/5"><SankeyNode {...sankeyData.earnings} color="bg-purple-500" /></div>
       </div>
     </div>
   );
 }
-
 function SankeyNode({ value, label, color }: { value: number; label: string; color: string; }) {
   return (
     <div className="flex flex-col items-center">

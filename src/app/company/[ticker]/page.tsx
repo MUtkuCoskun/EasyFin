@@ -89,9 +89,9 @@ function mapPricesByKeyField(rows: any[]): Record<string, any> {
     const kod = (r?.Kod ?? r?.kod)?.toString().trim();
     const field = (r?.Field ?? r?.field)?.toString().trim();
     if (kod && field) {
-      m[`${kod}_${field}`] = r; // örn: "Price1_fiyat"
+      m[`${kod}_${field}`] = r;
     } else if (kod) {
-      m[kod] = r; // nadiren Field yoksa
+      m[kod] = r;
     }
   }
   return m;
@@ -210,18 +210,7 @@ export async function generateMetadata({
   };
 }
 
-// === küçük yardımcı: bilanço kalemi toparlayıcı (opsiyonel, başka yerlerde kullanılıyor) ===
-function pickVal(
-  codes: Record<string, any>,
-  code: string,
-  periods: string[],
-  nameTR: string
-) {
-  const v = latestNonEmpty(codes[code], periods);
-  return v != null ? { key: code, name: nameTR, value: v } : null;
-}
-
-// === helper: belirli bir dönemden okuma ===
+// === küçük yardımcı: belirli bir dönemden okuma ===
 function readAt(row: any, periodKey: string | null): number | null {
   if (!row || !periodKey) return null;
   return toNum(row[periodKey]);
@@ -230,13 +219,25 @@ function readAt(row: any, periodKey: string | null): number | null {
 // === helper: ortak (aynı) son dönem seçimi ===
 function pickCommonPeriod(fin: SheetTable, codes: Record<string, any>): string | null {
   const periods = pickPeriods(fin); // new -> old
-  // Toplamları barındıran kodlar (aktif toplam, KV ve UV yükümlülükler)
   const musts = ["1BL", "2A", "2B"];
   for (const p of periods) {
     const ok = musts.every(k => toNum(codes[k]?.[p]) != null);
     if (ok) return p;
   }
   return periods[0] ?? null;
+}
+
+// === group helper ("Diğer") ===
+function makeGroup(
+  total: number | null,
+  items: Array<{ name: string; value: number | null }>
+) {
+  const fixed = items
+    .map(it => ({ name: it.name, value: it.value ?? 0 }))
+    .filter(x => isFinite(x.value));
+  const sumKnown = fixed.reduce((s, x) => s + (x.value || 0), 0);
+  const other = total != null ? Math.max(total - sumKnown, 0) : 0;
+  return [...fixed, { name: "Diğer", value: other }];
 }
 
 // --------- PAGE (SERVER) ----------
@@ -275,7 +276,6 @@ export default async function CompanyPage({ params }: { params: { ticker: string
     : Object.values((prices as any) || {});
   const pMapPrices = mapPricesByKeyField(priceRows);
 
-  // Price1_fiyat → Son fiyat, Price2_piyasa_değeri → Piyasa değeri
   const lastPrice =
     toNum(pMapPrices?.["Price1_fiyat"]?.Value ?? pMapPrices?.["Price1_fiyat"]?.value) ??
     toNum(pMapPrices?.["Price1_Fiyat"]?.Value ?? pMapPrices?.["Price1_Fiyat"]?.value);
@@ -299,7 +299,7 @@ export default async function CompanyPage({ params }: { params: { ticker: string
     return typeof v === "string" ? v : String(v ?? "");
   };
 
-  // ---------- DASH (SADECE DASH — rasyolar buradan, en yeni dönem) ----------
+  // ---------- DASH ----------
   const dashRows = dashRowsFromDoc(dash);
 
   // --- Income Statement (kesin kodlar) ---
@@ -335,7 +335,7 @@ export default async function CompanyPage({ params }: { params: { ticker: string
           return [m, a].some((x) => x == null) ? null : (m ?? 0) + (a ?? 0) + r;
         })();
 
-  // ---------- Balance Sheet (kesin kodlar) ----------
+  // ---------- Balance Sheet (eski yaklaşım için bazı hesaplar; kalsın) ----------
   const cash         = latestNonEmpty(codes["1AA"], periods);
   const receivables  = latestNonEmpty(codes["1AC"], periods);
   const inventory    = latestNonEmpty(codes["1AF"], periods);
@@ -351,82 +351,58 @@ export default async function CompanyPage({ params }: { params: { ticker: string
       ? Math.max(currLiab + nonCurrLiab - totalDebt, 0)
       : null;
 
-  // --------- Balance Breakdown (aynı dönem + totalden "Diğer") ----------
+  // ---------- Balance Breakdown (yeni gruplar için ortak dönem) ----------
   const commonP = pickCommonPeriod(fin, codes);
 
-  // === YENİ VE İYİLEŞTİRİLMİŞ KOD BAŞLANGICI ===
-  
-  // 1. Her bölümün toplamını, ilgili ana kalemlerden DOĞRUDAN ve bağımsız olarak oku.
-  const totalAssets = readAt(codes["1BL"], commonP) ?? 0;
-  const directTotalLiab = (readAt(codes["2A"], commonP) ?? 0) + (readAt(codes["2B"], commonP) ?? 0);
-  const directTotalEquity = readAt(codes["2N"], commonP) ?? ((readAt(codes["2O"], commonP) ?? 0) + (readAt(codes["2ODA"], commonP) ?? 0));
-  const directTotalSources = directTotalLiab + directTotalEquity;
-  
-  // 2. Varlıklar toplamını "tek doğru" kabul et. Kaynaklar tarafı ile arasında bir fark varsa,
-  //    bu farkı dağıtmak için bir düzeltme oranı hesapla.
-  const adjustmentFactor = (directTotalSources > 0 && totalAssets > 0) ? totalAssets / directTotalSources : 1;
-  
-  // 3. Bu oranı kullanarak Yükümlülük ve Özkaynak toplamlarını, Varlıklar toplamına tam olarak eşitlenecek şekilde ayarla.
-  //    Bu, "Diğer" kaleminin doğru hesaplanmasını sağlar.
-  const adjustedTotalLiab = directTotalLiab * adjustmentFactor;
-  const adjustedTotalEquity = directTotalEquity * adjustmentFactor;
-  
-  // === YENİ VE İYİLEŞTİRİLMİŞ KOD SONU ===
+  // Totals (ana başlıklar)
+  const totalAssets           = readAt(codes["1BL"], commonP) ?? 0;
+  const totalCurrentAssets    = readAt(codes["1A"],  commonP);
+  const totalNonCurrentAssets = readAt(codes["1AK"], commonP);
 
-  // — Aday kalemleri oku (hepsi aynı dönemden) —
-  function pv(code: string, name: string) {
-    const v = readAt(codes[code], commonP);
-    return v != null ? { key: code, name, value: v } : null;
-  }
+  const totalSTLiab = readAt(codes["2A"], commonP);
+  const totalLTLiab = readAt(codes["2B"], commonP);
+  const totalEquity = readAt(codes["2N"], commonP) ?? ((readAt(codes["2O"], commonP) ?? 0) + (readAt(codes["2ODA"], commonP) ?? 0));
 
-  const assetsPool = [
-    pv("1AA","Nakit ve Benzerleri"),
-    pv("1AB","KV Finansal Yatırımlar"),
-    pv("1AC","Ticari Alacaklar (KV)"),
-    pv("1AF","Stoklar"),
-    pv("1AH","Diğer Dönen Varlıklar"),
-    pv("1BG","Maddi Duran Varlıklar"),
-    pv("1BH","Maddi Olmayan Duran Varlıklar"),
-    pv("1BC","UV Finansal Yatırımlar"),
-    pv("1BD","Özkaynak Yöntemi Yatırımları"),
-    pv("1BF","Yatırım Amaçlı Gayrimenkuller"),
-    pv("1BJ","Ertelenmiş Vergi Varlığı"),
-    pv("1BK","Diğer Duran Varlıklar"),
-  ].filter(Boolean) as Array<{key:string; name:string; value:number}>;
+  // Current Assets (Dönen): Nakit, Finansal, Ticari, Stoklar, Diğer
+  const currentAssets = makeGroup(totalCurrentAssets, [
+    { name: "Nakit ve Nakit Benzerleri", value: readAt(codes["1AA"], commonP) },
+    { name: "Finansal Yatırımlar",       value: readAt(codes["1AB"], commonP) },
+    { name: "Ticari Alacaklar",          value: readAt(codes["1AC"], commonP) },
+    { name: "Stoklar",                    value: readAt(codes["1AF"], commonP) },
+  ]);
 
-  const liabilitiesPool = [
-    pv("2AA","KV Finansal Borçlar"),
-    pv("2AAGAA","Ticari Borçlar (KV)"),
-    pv("2BA","UV Finansal Borçlar"),
-    pv("2BBA","Ticari Borçlar (UV)"),
-    pv("2BF","Kıdem Tazm. ve Benzeri Karş."),
-    pv("2BG","Ertelenmiş Vergi Yük."),
-    pv("2BH","Diğer Uzun Vadeli Yük."),
-  ].filter(Boolean) as Array<{key:string; name:string; value:number}>;
+  // Non-Current Assets (Duran): verilen başlıklar + Diğer
+  const nonCurrentAssets = makeGroup(totalNonCurrentAssets, [
+    { name: "Ticari Alacaklar",                          value: readAt(codes["1B"],  commonP) },
+    { name: "Finansal Yatırımlar",                       value: readAt(codes["1BC"], commonP) },
+    { name: "Özkaynak Yöntemiyle Değerlenen Yatırımlar", value: readAt(codes["1BD"], commonP) },
+    { name: "Yatırım Amaçlı Gayrimenkuller",             value: readAt(codes["1BF"], commonP) },
+    { name: "Maddi Duran Varlıklar",                     value: readAt(codes["1BG"], commonP) },
+    { name: "Maddi Olmayan Duran Varlıklar",             value: readAt(codes["1BH"], commonP) },
+  ]);
 
-  const equityPool = [
-    pv("2OA","Ödenmiş Sermaye"),
-    pv("2OCE","Geçmiş Yıllar K/Z"),
-    pv("2OCF","Dönem Net K/Z"),
-    pv("2OCB","Değer Artış Fonları"),
-    pv("2Oca","Hisse Senedi İhraç Primleri"),
-    pv("2OD","Diğer Özsermaye Kalemleri"),
-    pv("2ODA","Azınlık Payları"),
-  ].filter(Boolean) as Array<{key:string; name:string; value:number}>;
+  // Short-Term Liabilities (Kısa): Finansal, Ticari, Ertelenmiş Gelirler (Müşteri Söz. Doğan Yük. Dış.Kal.), Diğer
+  const shortTermLiabilities = makeGroup(totalSTLiab, [
+    { name: "Finansal Borçlar", value: readAt(codes["2AA"],    commonP) },
+    { name: "Ticari Borçlar",   value: readAt(codes["2AAGAA"], commonP) },
+    { name: "Ertelenmiş Gelirler (Müşteri Söz. Doğan Yük. Dış.Kal.)", value: readAt(codes["2AAGCA"], commonP) },
+  ]);
 
-  // — ilk4 + Diğer (toplamdan) —
-  function top4PlusOtherToTotal(pool: {name:string; value:number}[], total: number | null) {
-    const list = (pool || []).filter(x => x.value > 0).sort((a,b)=>b.value-a.value);
-    if (!total || total <= 0) return list.slice(0,5);
-    const top4 = list.slice(0,4);
-    const sumTop4 = top4.reduce((s,x)=>s+x.value, 0);
-    const other = Math.max(total - sumTop4, 0);
-    return [...top4, { name: "Diğer", value: other }];
-  }
+  // Long-Term Liabilities (Uzun): Finansal, Ticari, Uzun vadeli karşılıklar, Ertelenmiş Vergi Yük., Diğer
+  const longTermLiabilities = makeGroup(totalLTLiab, [
+    { name: "Finansal Borçlar",            value: readAt(codes["2BA"],  commonP) },
+    { name: "Ticari Borçlar",              value: readAt(codes["2BBA"], commonP) },
+    { name: "Uzun vadeli karşılıklar",     value: readAt(codes["2BE"],  commonP) },
+    { name: "Ertelenmiş Vergi Yükümlülüğü",value: readAt(codes["2BG"],  commonP) },
+  ]);
 
-  const assetsItems      = top4PlusOtherToTotal(assetsPool, totalAssets);
-  const liabilitiesItems = top4PlusOtherToTotal(liabilitiesPool, adjustedTotalLiab);
-  const equityItems      = top4PlusOtherToTotal(equityPool, adjustedTotalEquity);
+  // Equity (Özkaynaklar): Ana Ortaklığa Ait, Ödenmiş Sermaye, YP Çevrim, Geçmiş Yıllar K/Z, Diğer
+  const equityGrouped = makeGroup(totalEquity, [
+    { name: "Ana Ortaklığa Ait Özkaynaklar", value: readAt(codes["2O"],   commonP) },
+    { name: "Ödenmiş Sermaye",               value: readAt(codes["2OA"],  commonP) },
+    { name: "Yabancı Para Çevrim Farkları",  value: readAt(codes["2OCC"], commonP) },
+    { name: "Geçmiş Yıllar Kar/Zararları",   value: readAt(codes["2OCE"], commonP) },
+  ]);
 
   // ---------- TTM ----------
   const ttmSales   = sumLastN(netSales, periods, 4);
@@ -462,41 +438,49 @@ export default async function CompanyPage({ params }: { params: { ticker: string
 
   // ---------- Ownership ----------
   let shareholders: Array<{ name: string; value: number }> = [];
-  const kapKeys = Object.keys(kapMap);
-  const indices = new Set<number>();
-  for (const k of kapKeys) {
-    const m = k.match(/^ownership\.sermaye_5ustu\[(\d+)\]\.Sermayedeki Payı\(%\)$/i);
-    if (m) indices.add(Number(m[1]));
+  {
+    const kapKeys = Object.keys(kapMap);
+    const indices = new Set<number>();
+    for (const k of kapKeys) {
+      const m = k.match(/^ownership\.sermaye_5ustu\[(\d+)\]\.Sermayedeki Payı\(%\)$/i);
+      if (m) indices.add(Number(m[1]));
+    }
+    for (const i of Array.from(indices).sort((a, b) => a - b)) {
+      const name = getKapExact(`ownership.sermaye_5ustu[${i}].Ortağın Adı-Soyadı/Ticaret Ünvanı`) || "Ortak";
+      const pct  = toNum(getKapExact(`ownership.sermaye_5ustu[${i}].Sermayedeki Payı(%)`));
+      if (name && pct != null) shareholders.push({ name, value: pct });
+    }
+    if (!shareholders.length) shareholders = [{ name: "Veri Bekleniyor", value: 100 }];
   }
-  for (const i of Array.from(indices).sort((a, b) => a - b)) {
-    const name = getKapExact(`ownership.sermaye_5ustu[${i}].Ortağın Adı-Soyadı/Ticaret Ünvanı`) || "Ortak";
-    const pct  = toNum(getKapExact(`ownership.sermaye_5ustu[${i}].Sermayedeki Payı(%)`));
-    if (name && pct != null) shareholders.push({ name, value: pct });
-  }
-  if (!shareholders.length) shareholders = [{ name: "Veri Bekleniyor", value: 100 }];
 
   const subsidiaries: string[] = [];
-  for (const k of kapKeys) {
-    const m = k.match(/^ownership\.bagli_ortakliklar\[(\d+)\]\.Ticaret Ünvanı$/i);
-    if (m) {
-      const v = getKapExact(k);
-      if (v) subsidiaries.push(v);
+  {
+    const kapKeys = Object.keys(kapMap);
+    for (const k of kapKeys) {
+      const m = k.match(/^ownership\.bagli_ortakliklar\[(\d+)\]\.Ticaret Ünvanı$/i);
+      if (m) {
+        const v = getKapExact(k);
+        if (v) subsidiaries.push(v);
+      }
     }
+    if (!subsidiaries.length) subsidiaries.push("Veri Bekleniyor");
   }
-  if (!subsidiaries.length) subsidiaries.push("Veri Bekleniyor");
 
   // Yönetim (Adı-Soyadı + Görevi)
   const management: Array<{ name: string; position: string }> = [];
-  for (const k of kapKeys) {
-    const m = k.match(/^board_members\[(\d+)\]\.Adı-Soyadı$/i);
-    if (m) {
-      const idx = m[1];
-      const name = getKapExact(`board_members[${idx}].Adı-Soyadı`);
-      const role = getKapExact(`board_members[${idx}].Görevi`) || "Yönetim Kurulu Üyesi";
-      if (name) management.push({ name, position: role });
+  {
+    const kapKeys = Object.keys(kapMap);
+    for (const k of kapKeys) {
+      const m = k.match(/^board_members\[(\d+)\]\.Adı-Soyadı$/i);
+      if (m) {
+        const idx = m[1];
+        const name = getKapExact(`board_members[${idx}].Adı-Soyadı`);
+        const role = getKapExact(`board_members[${idx}].Görevi`) || "Yönetim Kurulu Üyesi";
+        if (name) management.push({ name, position: role });
+      }
     }
+    if (!management.length) management.push({ name: "Veri Bekleniyor", position: "Yönetim Kurulu" });
   }
-  if (!management.length) management.push({ name: "Veri Bekleniyor", position: "Yönetim Kurulu" });
 
   // ---------- Waterfall ----------
   const wNWC = dashLatest(dashRows, "DashNWC", "Net İşletme Sermayesi", "NWC") ?? 0;
@@ -527,10 +511,18 @@ export default async function CompanyPage({ params }: { params: { ticker: string
       bookValue: equityAny, // Son dönem Özkaynaklar (Defter Değeri)
       sales: ttmSales       // Yıllıklandırılmış Satışlar
     },
+    // Bilanço – hem eski alanlar kalsın (fallback), hem yeni 5’li gruplar
     balanceSheet: {
-      assetsItems: assetsItems,
-      liabilitiesItems: liabilitiesItems,
-      equityItems: equityItems,
+      // eski yaklaşım için toplamlar/fallback (dokunma)
+      assetsItems: [], // istersen dolduruyorsun; eski UI için gerekirse
+      liabilitiesItems: [],
+      equityItems: [],
+      // yeni gruplar:
+      currentAssets,
+      nonCurrentAssets,
+      shortTermLiabilities,
+      longTermLiabilities,
+      equityGrouped,
     },
     incomeStatement: {
       revenue: lastRevenue,
