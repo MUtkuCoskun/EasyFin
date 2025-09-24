@@ -337,24 +337,34 @@ export default async function CompanyPage({ params }: { params: { ticker: string
   // BİLANÇO — ORTAK DÖNEM
   const commonP = pickCommonPeriod(fin, codes);
 
-  // Toplamlar
-  const totalAssets = readAt(codes["1BL"], commonP); // TOPLAM VARLIKLAR
-
-  const stLiab = readAt(codes["2A"], commonP) ?? 0; // KV Yükümlülükler
-  const ltLiab = readAt(codes["2B"], commonP) ?? 0; // UV Yükümlülükler
-  const totalLiab = stLiab + ltLiab;
-
-  // Özkaynak toplamı: önce 2N, yoksa 2O(Ana Ort.) + 2ODA(Azınlık)
+  // Toplamlar (2ODB = 1BL varsayımı)
   const equityN  = readAt(codes["2N"], commonP);
   const equityO  = readAt(codes["2O"], commonP) ?? 0;
   const equityMI = readAt(codes["2ODA"], commonP) ?? 0;
-  const totalEquity = equityN ?? (equityO + equityMI);
+  const totalEquity = equityN ?? (equityO + equityMI); // 2N ayrı yapılandırma
+
+  const totalSourcesReported = readAt(codes["2ODB"], commonP); // TOPLAM KAYNAKLAR (2ODB)
+  let   totalAssets = readAt(codes["1BL"], commonP);           // TOPLAM VARLIKLAR (1BL)
+  if (totalAssets == null && totalSourcesReported != null) {
+    // 2ODB = 1BL — raporda 1BL boşsa 2ODB üzerinden eşitle
+    totalAssets = totalSourcesReported;
+  }
+
+  // 2A (KV) ve 2B (UV) üzerinden ham toplamlar
+  const stLiabRaw = readAt(codes["2A"], commonP) ?? 0; // Kısa Vadeli Yükümlülükler
+  const ltLiabRaw = readAt(codes["2B"], commonP) ?? 0; // Uzun Vadeli Yükümlülükler
+
+  // 2ODB mevcutsa Kaynaklar iki parçaya ayrılır: (2A+2B) ve 2N
+  // Öncelik: 2ODB - 2N = Toplam Yükümlülükler
+  const totalLiab = (totalSourcesReported != null && totalEquity != null)
+    ? Math.max(totalSourcesReported - totalEquity, 0)
+    : (stLiabRaw + ltLiabRaw);
 
   const totalSourcesCalc = (totalLiab ?? 0) + (totalEquity ?? 0);
-  const totalSourcesReported = readAt(codes["2ODB"], commonP); // yalnız kontrol amaçlı
 
-  // Bilanço eşitliği kontrolü — diff 0 olmalı
+  // Bilanço eşitliği kontrolü — 1BL ile 2ODB aynı olmalı, diff ~ 0
   const balanceDiff = (totalAssets ?? 0) - (totalSourcesCalc ?? 0);
+
   if (Math.abs(balanceDiff) > 0.5) { // tolerans: 0.5 TL
     console.warn("[BALANCE-CHECK] Eşitsizlik:", {
       ticker, commonP, totalAssets, totalLiab, totalEquity, totalSourcesCalc, totalSourcesReported, balanceDiff,
@@ -402,7 +412,7 @@ export default async function CompanyPage({ params }: { params: { ticker: string
     pv("2ODA", "Azınlık Payları"),
   ].filter(defined).filter(x => x.value > 0).sort((a,b)=>b.value-a.value);
 
-  type KV = { name: string; value: number };
+  type KV = { key?: string; name: string; value: number };
   function top4PlusOtherToTotal(pool: KV[], total: number | null): KV[] {
     const list = (pool || []).filter(x => x.value > 0).sort((a,b)=>b.value-a.value);
     if (!total || total <= 0) return list.slice(0, 5);
@@ -413,8 +423,41 @@ export default async function CompanyPage({ params }: { params: { ticker: string
   }
 
   const assetsItems      = top4PlusOtherToTotal(assetsPool, totalAssets);
-  const liabilitiesItems = top4PlusOtherToTotal(liabilitiesPool, totalLiab);
+  // 2N'yi ayrı (özsermaye), 2A→2N arası (yükümlülükler) ayrı yapılandır ve sırala
+  // — Özsermaye (2N ailesi) —
   const equityItems      = top4PlusOtherToTotal(equityPool, totalEquity);
+
+  // — Yükümlülükler (2A + 2B) — KV ve UV olarak sınıflandır
+  const kvPool = liabilitiesPool.filter(x => /^KV|\(KV\)/i.test(x.name) || x.name.includes("KV ") || x.name.includes("Kısa"));
+  const uvPool = liabilitiesPool.filter(x => /^UV|\(UV\)/i.test(x.name) || x.name.includes("UV ") || x.name.includes("Uzun"));
+
+  // KV: en büyük 2 kalem + Diğer KV (2A toplamından artan)
+  const kvTop  = kvPool.slice(0, 2);
+  const kvSumTop = kvTop.reduce((s,x)=>s+x.value,0);
+  const kvOther = Math.max((stLiabRaw ?? 0) - kvSumTop, 0);
+  const kvItems: KV[] = kvTop.concat(kvOther > 0 ? [{ key: "OTHER_KV", name: "Diğer KV", value: kvOther }] : []);
+
+  // UV: en büyük 2 kalem + Diğer UV (2B toplamından artan)
+  const uvTop  = uvPool.slice(0, 2);
+  const uvSumTop = uvTop.reduce((s,x)=>s+x.value,0);
+  const uvOther = Math.max((ltLiabRaw ?? 0) - uvSumTop, 0);
+  const uvItems: KV[] = uvTop.concat(uvOther > 0 ? [{ key: "OTHER_UV", name: "Diğer UV", value: uvOther }] : []);
+
+  // Birleştirip toplamı 2ODB-2N (veya st+lt) ile hizala
+  let liabilitiesItems: KV[] = [...kvItems, ...uvItems]
+    .filter(x => x.value > 0)
+    .sort((a,b)=> b.value - a.value);
+
+  // Toplamı fazla kaçarsa en küçük "Diğer"leri kıs
+  const liabTotalNow = liabilitiesItems.reduce((s,x)=>s+x.value,0);
+  if (totalLiab != null && liabTotalNow > totalLiab + 0.5) {
+    const over = liabTotalNow - totalLiab;
+    const idxKV = liabilitiesItems.findIndex(x => x.name === "Diğer KV");
+    const idxUV = liabilitiesItems.findIndex(x => x.name === "Diğer UV");
+    if (idxKV >= 0) liabilitiesItems[idxKV].value = Math.max(0, liabilitiesItems[idxKV].value - over/2);
+    if (idxUV >= 0) liabilitiesItems[idxUV].value = Math.max(0, liabilitiesItems[idxUV].value - over/2);
+  }
+
 
   // TTM
   function sumLastN(row: any, periodKeys: string[], n: number): number | null {
